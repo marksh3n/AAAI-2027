@@ -1,0 +1,170 @@
+import json, re
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+from extract import ACTS_PATH, LAYERS, META_PATH, TRACES_PATH
+
+RESULTS_PATH = "data/results.parquet"
+SUMMARY_PATH = "data/summary.json"
+N_BINS = 8
+CS = [0.003, 0.01, 0.03, 0.1, 1.0]
+SEED = 0
+SELF_CORRECT = re.compile(r"\b(wait|hold on|let me re|actually)\b", re.I)
+
+
+def make_splits(problem_ids):
+    ids = np.array(sorted(set(problem_ids)))
+    np.random.default_rng(SEED).shuffle(ids)
+    a, b = int(0.6 * len(ids)), int(0.8 * len(ids))
+    return set(ids[:a]), set(ids[a:b]), set(ids[b:])
+
+
+def trace_level(meta, probs):
+    df = pd.DataFrame({"trace_id": meta.trace_id.values, "y": meta.y.values, "p": probs})
+    return df.groupby("trace_id").agg(y=("y", "first"), p=("p", "mean"))
+
+
+def auroc(g):
+    return roc_auc_score(g.y, g.p) if g.y.nunique() > 1 else np.nan
+
+
+def fit(X, y, C):
+    return make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=2000)).fit(X, y)
+
+
+def run_grid(meta, acts, train, val, bins=range(N_BINS)):
+    out = []
+    for layer_pos, layer in enumerate(LAYERS):
+        feats = np.asarray(acts[:, layer_pos, :], dtype=np.float32)
+        for b in bins:
+            cell = meta[meta.bin == b]
+            tr = cell[cell.problem_id.isin(train)]
+            va = cell[cell.problem_id.isin(val)]
+            if tr.y.nunique() < 2 or va.y.nunique() < 2:
+                continue
+            for C in CS:
+                model = fit(feats[tr.row.values], tr.y.values, C)
+                g = trace_level(va, model.predict_proba(feats[va.row.values])[:, 1])
+                out.append(
+                    {
+                        "layer": layer,
+                        "bin": b,
+                        "C": C,
+                        "val_auroc": auroc(g),
+                        "n_train_rows": len(tr),
+                        "n_val_traces": len(g),
+                    }
+                )
+    return pd.DataFrame(out)
+
+
+def evaluate(meta, acts, train, test, layer, b, C, bins=None):
+    feats = np.asarray(acts[:, LAYERS.index(layer), :], dtype=np.float32)
+    cell = meta[meta.bin == b] if bins is None else meta[meta.bin.isin(bins)]
+    tr = cell[cell.problem_id.isin(train)]
+    te = cell[cell.problem_id.isin(test)]
+    model = fit(feats[tr.row.values], tr.y.values, C)
+    g = trace_level(te, model.predict_proba(feats[te.row.values])[:, 1])
+    return auroc(g), g
+
+
+def bootstrap_ci(g, n=1000):
+    rng = np.random.default_rng(SEED)
+    y, p = g.y.values, g.p.values
+    scores = []
+    for _ in range(n):
+        i = rng.integers(0, len(y), len(y))
+        if len(np.unique(y[i])) > 1:
+            scores.append(roc_auc_score(y[i], p[i]))
+    return [float(np.percentile(scores, 2.5)), float(np.percentile(scores, 97.5))]
+
+
+def select_and_test(meta, acts, train, val, test, tag, bins=range(N_BINS)):
+    grid = run_grid(meta, acts, train, val, bins)
+    grid["condition"] = tag
+    best = grid.loc[grid.val_auroc.idxmax()]
+    test_auroc, g = evaluate(meta, acts, train, test, int(best.layer), int(best.bin), float(best.C))
+    return grid, {
+        "layer": int(best.layer),
+        "bin": int(best.bin),
+        "C": float(best.C),
+        "val_auroc": float(best.val_auroc),
+        "test_auroc": float(test_auroc),
+        "test_ci": bootstrap_ci(g),
+        "n_test_traces": int(len(g)),
+        "n_test_wrong": int(g.y.sum()),
+    }
+
+
+def length_matched(meta):
+    per_trace = meta.groupby("trace_id").agg(y=("y", "first"), n_steps=("n_steps", "first"))
+    q = pd.qcut(per_trace.n_steps, 5, labels=False, duplicates="drop")
+    rng = np.random.default_rng(SEED)
+    keep = []
+    for b in np.unique(q):
+        grp = per_trace[q == b]
+        wrong, right = grp[grp.y == 1], grp[grp.y == 0]
+        k = min(len(wrong), len(right))
+        if k:
+            keep += list(rng.choice(wrong.index, k, replace=False))
+            keep += list(rng.choice(right.index, k, replace=False))
+    return meta[meta.trace_id.isin(keep)]
+
+
+def shuffled(meta):
+    labels = meta.groupby("trace_id").y.first()
+    perm = np.random.default_rng(SEED + 1).permutation(labels.values)
+    swap = dict(zip(labels.index, perm))
+    out = meta.copy()
+    out["y"] = out.trace_id.map(swap)
+    return out
+
+
+def main():
+    meta = pd.read_parquet(META_PATH)
+    acts = np.load(ACTS_PATH, mmap_mode="r")
+    meta["y"] = (~meta.is_correct.astype(bool)).astype(int)
+    meta["rel"] = meta.step_idx / meta.n_steps
+    meta["bin"] = np.clip((meta.rel * N_BINS).astype(int), 0, N_BINS - 1)
+
+    train, val, test = make_splits(meta.problem_id)
+    assert not (train & val) and not (train & test) and not (val & test)
+
+    grids, summary = [], {}
+    for tag, m in [
+        ("main", meta),
+        ("shuffled", shuffled(meta)),
+        ("length_matched", length_matched(meta)),
+    ]:
+        grid, best = select_and_test(m, acts, train, val, test, tag)
+        grids.append(grid)
+        summary[tag] = best
+        print(tag, best["layer"], best["bin"], f"test {best['test_auroc']:.3f}")
+
+    early = meta[meta.rel < 0.6]
+    grid, best = select_and_test(early, acts, train, val, test, "first60", range(5))
+    grids.append(grid)
+    summary["first60"] = best
+    print("first60", best["layer"], best["bin"], f"test {best['test_auroc']:.3f}")
+
+    summary["selectivity_gap"] = summary["main"]["test_auroc"] - summary["shuffled"]["test_auroc"]
+
+    traces = [json.loads(line) for line in open(TRACES_PATH)]
+    summary["truncation_rate"] = sum(t["trunc"] for t in traces) / len(traces)
+    kept = [t for t in traces if not t["trunc"]]
+    summary["accuracy"] = sum(t["is_correct"] for t in kept) / len(kept)
+    summary["self_correction_rate"] = sum(
+        bool(SELF_CORRECT.search(t["text"].split("</think>")[0])) for t in kept
+    ) / len(kept)
+
+    pd.concat(grids).to_parquet(RESULTS_PATH)
+    json.dump(summary, open(SUMMARY_PATH, "w"), indent=2)
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()
