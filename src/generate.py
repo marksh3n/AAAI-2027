@@ -7,7 +7,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 OUT_PATH = "data/traces.jsonl"
-MAX_NEW = 4096
 INSTRUCTION = "\nPlease reason step by step, and put your final answer within \\boxed{}."
 
 
@@ -63,6 +62,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=0)
     parser.add_argument("--bs", type=int, default=16)
+    parser.add_argument("--max-new", type=int, default=4096)
     args = parser.parse_args()
 
     problems = load_problems(args.n)
@@ -104,7 +104,7 @@ def main():
                 do_sample=True,
                 temperature=0.6,
                 top_p=0.95,
-                max_new_tokens=MAX_NEW,
+                max_new_tokens=args.max_new,
                 pad_token_id=tokenizer.pad_token_id,
             )
         for i, p in enumerate(batch):
@@ -125,7 +125,7 @@ def main():
                         "gold": p["answer"],
                         "text": text,
                         "n_gen": n_gen,
-                        "trunc": n_gen >= MAX_NEW or "</think>" not in text,
+                        "trunc": n_gen >= args.max_new or "</think>" not in text,
                         "answer": answer,
                         "is_correct": answers_match(answer, p["answer"]),
                     }
