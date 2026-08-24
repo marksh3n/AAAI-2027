@@ -1,4 +1,4 @@
-import json, re
+import json, os, re
 from collections import Counter
 import numpy as np
 import pandas as pd
@@ -53,6 +53,7 @@ def run_grid(meta, acts, dev, bins=range(N_BINS)):
     out = []
     for layer_pos, layer in enumerate(LAYERS):
         feats = np.asarray(acts[:, layer_pos, :], dtype=np.float32)
+        print(f"  layer {layer}", flush=True)
         for b in bins:
             cell = meta[meta.bin == b]
             for C in CS:
@@ -101,8 +102,13 @@ def bootstrap_ci(g, n=1000):
 
 
 def select_and_test(meta, acts, dev, test, tag, bins=range(N_BINS)):
-    grid = run_grid(meta, acts, dev, bins)
-    grid["condition"] = tag
+    cached = f"data/grid_{tag}.parquet"
+    if os.path.exists(cached):
+        grid = pd.read_parquet(cached)
+    else:
+        grid = run_grid(meta, acts, dev, bins)
+        grid["condition"] = tag
+        grid.to_parquet(cached)
     best = grid.loc[grid.cv_auroc.idxmax()]
     test_auroc, g = evaluate(meta, acts, dev, test, int(best.layer), int(best.bin), float(best.C))
     return grid, {
@@ -159,6 +165,7 @@ def main():
         ("shuffled", shuffled(meta)),
         ("length_matched", length_matched(meta)),
     ]:
+        print(tag, flush=True)
         grid, best = select_and_test(m, acts, dev, test, tag)
         grids.append(grid)
         summary[tag] = best
