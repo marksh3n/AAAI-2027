@@ -1,4 +1,5 @@
 import json, re
+from collections import Counter
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
@@ -155,11 +156,20 @@ def main():
 
     traces = [json.loads(line) for line in open(TRACES_PATH)]
     summary["truncation_rate"] = sum(t["trunc"] for t in traces) / len(traces)
-    kept = [t for t in traces if not t["trunc"]]
+    kept = traces
+    for t in kept:
+        if t["trunc"]:
+            t["is_correct"] = False
     summary["accuracy"] = sum(t["is_correct"] for t in kept) / len(kept)
     summary["self_correction_rate"] = sum(
         bool(SELF_CORRECT.search(t["text"].split("</think>")[0])) for t in kept
     ) / len(kept)
+
+    by_level = Counter((t["level"], t["is_correct"]) for t in kept)
+    summary["by_level"] = {
+        str(l): {"n": by_level[(l, True)] + by_level[(l, False)], "wrong": by_level[(l, False)]}
+        for l in (3, 4, 5)
+    }
 
     pd.concat(grids).to_parquet(RESULTS_PATH)
     json.dump(summary, open(SUMMARY_PATH, "w"), indent=2)

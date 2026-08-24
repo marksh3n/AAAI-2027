@@ -21,6 +21,7 @@ def _(mo, summary):
     _main, _shuf = summary["main"], summary["shuffled"]
     _lm, _early = summary["length_matched"], summary["first60"]
     _ci = _main["test_ci"]
+    _lv = " / ".join(f"L{k}: {v['wrong']}/{v['n']}" for k, v in summary["by_level"].items())
     mo.md(f"""
     ## E0 summary
 
@@ -36,6 +37,7 @@ def _(mo, summary):
     | accuracy | {summary['accuracy']:.1%} |
     | truncation rate | {summary['truncation_rate']:.1%} |
     | self-correction rate | {summary['self_correction_rate']:.1%} |
+    | errors by level | {_lv} |
 
     Go/no-go: test AUROC >= 0.65, selectivity gap > 0.10, surviving length matching.
     """)

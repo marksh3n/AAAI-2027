@@ -14,15 +14,17 @@ MIN_STEP_TOKENS = 5
 
 
 def step_spans(text):
-    # char spans: one per \n\n paragraph inside <think>, plus one for everything after it
+    # char spans: one per \n\n paragraph inside <think>, plus one for everything after it.
+    # a truncated trace has no </think>, so it is all thinking and gets no answer step.
     think_end = text.find("</think>")
     spans = []
     pos = 0
-    for chunk in text[:think_end].split("\n\n"):
+    for chunk in text[: think_end if think_end >= 0 else len(text)].split("\n\n"):
         if chunk.strip():
             spans.append((pos, pos + len(chunk)))
         pos += len(chunk) + 2
-    spans.append((think_end, len(text)))
+    if think_end >= 0:
+        spans.append((think_end, len(text)))
     return spans
 
 
@@ -114,8 +116,12 @@ def main():
     args = parser.parse_args()
 
     traces = [json.loads(line) for line in open(TRACES_PATH)]
-    kept = [t for t in traces if not t["trunc"]]
-    print(f"truncated {len(traces) - len(kept)}/{len(traces)} ({1 - len(kept) / len(traces):.1%})")
+    n_trunc = sum(t["trunc"] for t in traces)
+    print(f"truncated {n_trunc}/{len(traces)} ({n_trunc / len(traces):.1%}), counted as incorrect")
+    kept = traces
+    for t in kept:
+        if t["trunc"]:
+            t["is_correct"] = False
 
     tokenizer, model, device = load_model()
     if args.check:
