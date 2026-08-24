@@ -1,4 +1,4 @@
-import argparse, json
+import argparse, json, os
 import numpy as np
 import pandas as pd
 import torch
@@ -9,8 +9,10 @@ from generate import MODEL, build_prompt
 TRACES_PATH = "data/traces.jsonl"
 ACTS_PATH = "data/acts.npy"
 META_PATH = "data/meta.parquet"
+PARTS_DIR = "data/parts"
 LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # decoder block index; -1 is the embedding output
 MIN_STEP_TOKENS = 5
+CHUNK = 1024
 
 
 def step_spans(text):
@@ -79,15 +81,29 @@ def load_model():
 
 
 def activations(model, device, prompt_ids, trace_ids, token_idx):
-    ids = torch.tensor([prompt_ids + trace_ids], device=device)
-    with torch.no_grad():
-        # model.model skips the lm_head; the logits would be a 1.2 GB tensor we never look at
-        out = model.model(ids, output_hidden_states=True)
+    # fed in chunks with a kv cache rather than one forward: a 30k-token sequence makes
+    # attention allocate seq x seq, which OOMs a T4. causal attention makes this identical.
+    # model.model skips the lm_head; the logits would be a huge tensor we never look at
+    ids = prompt_ids + trace_ids
     picks = [len(prompt_ids) + i for i in token_idx]
-    h = torch.stack([out.hidden_states[layer + 1][0, picks] for layer in LAYERS])
-    h = h.permute(1, 0, 2).half().cpu().numpy()
-    del out
-    return h
+    want = set(picks)
+    grabbed = {}
+    cache = None
+    with torch.no_grad():
+        for start in range(0, len(ids), CHUNK):
+            piece = torch.tensor([ids[start : start + CHUNK]], device=device)
+            out = model.model(
+                piece, past_key_values=cache, use_cache=True, output_hidden_states=True
+            )
+            cache = out.past_key_values
+            for pos in want:
+                if start <= pos < start + piece.shape[1]:
+                    grabbed[pos] = torch.stack(
+                        [out.hidden_states[layer + 1][0, pos - start] for layer in LAYERS]
+                    ).half().cpu()
+            del out
+    del cache
+    return torch.stack([grabbed[p] for p in picks]).numpy()
 
 
 def check(tokenizer, model, device, trace):
@@ -130,11 +146,21 @@ def main():
         check(tokenizer, model, device, kept[0])
         return
 
-    rows, acts, n_rows = [], [], 0
+    # one file per trace so a crash or a colab disconnect costs one trace, not the run
+    os.makedirs(PARTS_DIR, exist_ok=True)
     for n, trace in enumerate(kept):
+        part = f"{PARTS_DIR}/{n}.npy"
+        if os.path.exists(part):
+            continue
         prompt_ids, trace_ids, offsets = encode(tokenizer, trace)
         spans, token_idx = segment(trace["text"], offsets)
-        h = activations(model, device, prompt_ids, trace_ids, token_idx)
+        np.save(part, activations(model, device, prompt_ids, trace_ids, token_idx))
+        if n % 25 == 0:
+            print(f"{n}/{len(kept)}", flush=True)
+
+    rows, acts = [], []
+    for n, trace in enumerate(kept):
+        h = np.load(f"{PARTS_DIR}/{n}.npy")
         for step in range(len(h)):
             rows.append(
                 {
@@ -144,13 +170,10 @@ def main():
                     "n_steps": len(h),
                     "is_correct": trace["is_correct"],
                     "answer": trace["answer"],
-                    "row": n_rows + step,
+                    "row": len(rows),
                 }
             )
         acts.append(h)
-        n_rows += len(h)
-        if n % 25 == 0:
-            print(f"{n}/{len(kept)}", flush=True)
 
     acts = np.concatenate(acts)
     np.save(ACTS_PATH, acts)
