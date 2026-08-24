@@ -12,7 +12,8 @@ from extract import ACTS_PATH, LAYERS, META_PATH, TRACES_PATH
 RESULTS_PATH = "data/results.parquet"
 SUMMARY_PATH = "data/summary.json"
 N_BINS = 8
-CS = [0.003, 0.01, 0.03, 0.1, 1.0]
+CS = [0.01, 0.1, 1.0]
+K_FOLDS = 5
 SEED = 0
 SELF_CORRECT = re.compile(r"\b(wait|hold on|let me re|actually)\b", re.I)
 
@@ -20,8 +21,16 @@ SELF_CORRECT = re.compile(r"\b(wait|hold on|let me re|actually)\b", re.I)
 def make_splits(problem_ids):
     ids = np.array(sorted(set(problem_ids)))
     np.random.default_rng(SEED).shuffle(ids)
-    a, b = int(0.6 * len(ids)), int(0.8 * len(ids))
-    return set(ids[:a]), set(ids[a:b]), set(ids[b:])
+    cut = int(0.8 * len(ids))
+    return ids[:cut], ids[cut:]
+
+
+def folds(dev):
+    # dev is already shuffled, so striding gives random folds
+    return [
+        (np.concatenate([dev[j::K_FOLDS] for j in range(K_FOLDS) if j != i]), dev[i::K_FOLDS])
+        for i in range(K_FOLDS)
+    ]
 
 
 def trace_level(meta, probs):
@@ -37,36 +46,43 @@ def fit(X, y, C):
     return make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=2000)).fit(X, y)
 
 
-def run_grid(meta, acts, train, val, bins=range(N_BINS)):
+def run_grid(meta, acts, dev, bins=range(N_BINS)):
+    # K-fold CV over dev for cell selection: one val split has too few errors to pick
+    # the best of ~200 cells without landing on noise
+    splits = folds(dev)
     out = []
     for layer_pos, layer in enumerate(LAYERS):
         feats = np.asarray(acts[:, layer_pos, :], dtype=np.float32)
         for b in bins:
             cell = meta[meta.bin == b]
-            tr = cell[cell.problem_id.isin(train)]
-            va = cell[cell.problem_id.isin(val)]
-            if tr.y.nunique() < 2 or va.y.nunique() < 2:
-                continue
             for C in CS:
-                model = fit(feats[tr.row.values], tr.y.values, C)
-                g = trace_level(va, model.predict_proba(feats[va.row.values])[:, 1])
-                out.append(
-                    {
-                        "layer": layer,
-                        "bin": b,
-                        "C": C,
-                        "val_auroc": auroc(g),
-                        "n_train_rows": len(tr),
-                        "n_val_traces": len(g),
-                    }
-                )
+                scores = []
+                for tr_ids, va_ids in splits:
+                    tr = cell[cell.problem_id.isin(tr_ids)]
+                    va = cell[cell.problem_id.isin(va_ids)]
+                    if tr.y.nunique() < 2 or va.y.nunique() < 2:
+                        continue
+                    model = fit(feats[tr.row.values], tr.y.values, C)
+                    g = trace_level(va, model.predict_proba(feats[va.row.values])[:, 1])
+                    scores.append(auroc(g))
+                if scores:
+                    out.append(
+                        {
+                            "layer": layer,
+                            "bin": b,
+                            "C": C,
+                            "cv_auroc": float(np.nanmean(scores)),
+                            "cv_std": float(np.nanstd(scores)),
+                            "n_folds": len(scores),
+                        }
+                    )
     return pd.DataFrame(out)
 
 
-def evaluate(meta, acts, train, test, layer, b, C, bins=None):
+def evaluate(meta, acts, dev, test, layer, b, C, bins=None):
     feats = np.asarray(acts[:, LAYERS.index(layer), :], dtype=np.float32)
     cell = meta[meta.bin == b] if bins is None else meta[meta.bin.isin(bins)]
-    tr = cell[cell.problem_id.isin(train)]
+    tr = cell[cell.problem_id.isin(dev)]
     te = cell[cell.problem_id.isin(test)]
     model = fit(feats[tr.row.values], tr.y.values, C)
     g = trace_level(te, model.predict_proba(feats[te.row.values])[:, 1])
@@ -84,16 +100,17 @@ def bootstrap_ci(g, n=1000):
     return [float(np.percentile(scores, 2.5)), float(np.percentile(scores, 97.5))]
 
 
-def select_and_test(meta, acts, train, val, test, tag, bins=range(N_BINS)):
-    grid = run_grid(meta, acts, train, val, bins)
+def select_and_test(meta, acts, dev, test, tag, bins=range(N_BINS)):
+    grid = run_grid(meta, acts, dev, bins)
     grid["condition"] = tag
-    best = grid.loc[grid.val_auroc.idxmax()]
-    test_auroc, g = evaluate(meta, acts, train, test, int(best.layer), int(best.bin), float(best.C))
+    best = grid.loc[grid.cv_auroc.idxmax()]
+    test_auroc, g = evaluate(meta, acts, dev, test, int(best.layer), int(best.bin), float(best.C))
     return grid, {
         "layer": int(best.layer),
         "bin": int(best.bin),
         "C": float(best.C),
-        "val_auroc": float(best.val_auroc),
+        "cv_auroc": float(best.cv_auroc),
+        "cv_std": float(best.cv_std),
         "test_auroc": float(test_auroc),
         "test_ci": bootstrap_ci(g),
         "n_test_traces": int(len(g)),
@@ -132,8 +149,9 @@ def main():
     meta["rel"] = meta.step_idx / meta.n_steps
     meta["bin"] = np.clip((meta.rel * N_BINS).astype(int), 0, N_BINS - 1)
 
-    train, val, test = make_splits(meta.problem_id)
-    assert not (train & val) and not (train & test) and not (val & test)
+    dev, test = make_splits(meta.problem_id)
+    assert not set(dev) & set(test)
+    print(f"{len(dev)} dev / {len(test)} test problems, {K_FOLDS}-fold CV for selection")
 
     grids, summary = [], {}
     for tag, m in [
@@ -141,13 +159,13 @@ def main():
         ("shuffled", shuffled(meta)),
         ("length_matched", length_matched(meta)),
     ]:
-        grid, best = select_and_test(m, acts, train, val, test, tag)
+        grid, best = select_and_test(m, acts, dev, test, tag)
         grids.append(grid)
         summary[tag] = best
         print(tag, best["layer"], best["bin"], f"test {best['test_auroc']:.3f}")
 
     early = meta[meta.rel < 0.6]
-    grid, best = select_and_test(early, acts, train, val, test, "first60", range(5))
+    grid, best = select_and_test(early, acts, dev, test, "first60", range(5))
     grids.append(grid)
     summary["first60"] = best
     print("first60", best["layer"], best["bin"], f"test {best['test_auroc']:.3f}")

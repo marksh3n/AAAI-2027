@@ -49,7 +49,7 @@ def _(np, pd, plt, results):
     def _heatmap(ax, condition, title):
         # best C per cell, so the grid is layer x bin
         sub = results[results.condition == condition]
-        grid = sub.pivot_table(index="layer", columns="bin", values="val_auroc", aggfunc="max")
+        grid = sub.pivot_table(index="layer", columns="bin", values="cv_auroc", aggfunc="max")
         im = ax.imshow(grid.values, vmin=0.35, vmax=0.85, cmap="RdBu_r", aspect="auto")
         ax.set_xticks(range(grid.shape[1]), [f"{b / 8:.2f}" for b in grid.columns])
         ax.set_yticks(range(grid.shape[0]), grid.index)
@@ -67,7 +67,7 @@ def _(np, pd, plt, results):
     for _ax, (_cond, _title) in zip(
         _axes,
         [
-            ("main", "val AUROC"),
+            ("main", "5-fold CV AUROC"),
             ("shuffled", "shuffled labels"),
             ("length_matched", "length-matched"),
         ],
@@ -84,12 +84,12 @@ def _(plt, results, summary):
     _curve = (
         results[(results.condition == "main") & (results.layer == _layer)]
         .groupby("bin")
-        .val_auroc.max()
+        .cv_auroc.max()
     )
     _shufc = (
         results[(results.condition == "shuffled") & (results.layer == _layer)]
         .groupby("bin")
-        .val_auroc.max()
+        .cv_auroc.max()
     )
 
     _fig2, _ax2 = plt.subplots(figsize=(7, 4.5))
@@ -98,7 +98,7 @@ def _(plt, results, summary):
     _ax2.axhline(0.5, color="k", lw=0.8)
     _ax2.axvline(0.6, color="crimson", ls=":", label="60% of trace")
     _ax2.set_xlabel("relative position in trace")
-    _ax2.set_ylabel("val AUROC")
+    _ax2.set_ylabel("5-fold CV AUROC")
     _ax2.set_title(f"error signal vs step position, layer {_layer}")
     _ax2.legend()
     _fig2
