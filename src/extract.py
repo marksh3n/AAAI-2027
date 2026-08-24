@@ -104,9 +104,11 @@ def check(tokenizer, model, device, trace):
     print(f"{len(spans)} steps, {len(trace_ids)} trace tokens\n")
     print("step | text at span end        | text decoded up to chosen token")
     for i, (span, idx) in enumerate(zip(spans, token_idx)):
-        want = trace["text"][span[0] : span[1]][-24:]
-        got = tokenizer.decode(trace_ids[: idx + 1])[-24:]
-        flag = "" if want.endswith(got[-12:]) else "   <-- MISMATCH"
+        # rstrip both: a step's last token is usually ".\n\n", which runs past the span end
+        want = trace["text"][span[0] : span[1]].rstrip()[-24:]
+        got = tokenizer.decode(trace_ids[: idx + 1]).rstrip()
+        flag = "" if got.endswith(want) else "   <-- MISMATCH"
+        got = got[-24:]
         print(f"{i:4d} | {want!r:26} | {got!r}{flag}")
 
 
