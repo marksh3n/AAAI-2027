@@ -17,21 +17,6 @@ def shingles(text):
     return [" ".join(words[i : i + SHINGLE]) for i in range(len(words) - SHINGLE + 1)]
 
 
-def all_boxed(text):
-    # brace-matched like generate.extract_boxed, but every hit rather than the last:
-    # the number of distinct candidates a trace cycles through is a crude flailing measure
-    out, i = [], text.find("\\boxed{")
-    while i >= 0:
-        j, depth = i + 7, 1
-        while j < len(text) and depth:
-            depth += (text[j] == "{") - (text[j] == "}")
-            j += 1
-        if depth == 0:
-            out.append(text[i + 7 : j - 1])
-        i = text.find("\\boxed{", j)
-    return out
-
-
 def classify(t, loop_rep):
     # threshold on rep, which is a fraction, not on a raw repeat count: the same count
     # means very different things in a 2k and a 30k token trace
@@ -58,21 +43,21 @@ def main():
         counts = pd.Series(grams).value_counts() if grams else pd.Series(dtype=int)
         t["rep"] = 1 - len(counts) / len(grams) if grams else 0.0
         t["max_rep"] = int(counts.iloc[0]) if len(counts) else 0
-        t["cands"] = len(set(all_boxed(think)))
+        # per 1k tokens, so this is not just length again. unlike final n_gen it is also
+        # computable online, which makes it the baseline a live monitor actually competes with
         t["restarts"] = len(RESTART.findall(think)) / max(t["n_gen"], 1) * 1000
         t["wrong"] = bool(t["trunc"] or not t["is_correct"])
         t["cat"] = classify(t, args.loop_rep) if t["wrong"] else "correct"
 
     df = pd.DataFrame(traces)[
-        ["trace_id", "problem_id", "level", "cat", "wrong", "n_gen", "rep", "max_rep",
-         "cands", "restarts"]
+        ["trace_id", "problem_id", "level", "cat", "wrong", "n_gen", "rep", "max_rep", "restarts"]
     ]
     wrong, ok = df[df.wrong], df[~df.wrong]
     print(f"{len(wrong)} wrong of {len(df)}  (loop threshold rep >= {args.loop_rep})\n")
     print(
         df.groupby("cat")
         .agg(n=("n_gen", "size"), median_n_gen=("n_gen", "median"), median_rep=("rep", "median"),
-             median_cands=("cands", "median"), median_restarts=("restarts", "median"))
+             median_restarts=("restarts", "median"))
         .sort_values("n", ascending=False)
         .round(3)
         .to_string()
@@ -85,7 +70,7 @@ def main():
     # a loop classifier flags long traces, so dropping them lowers the length AUROC whether
     # or not looping is the cause. the assumption-free question is whether the shorter wrong
     # traces are still longer than correct ones, which bounds what any classifier could buy
-    print()
+    print(f"\n{'AUROC by subset':32}{'n_wrong':>8}{'n_gen':>8}{'restarts':>10}")
     for label, sub in [
         ("all", df),
         ("-loop", df[df.cat != "loop"]),
@@ -93,10 +78,11 @@ def main():
         ("wrong below their median", df[~df.wrong | (df.n_gen <= wrong.n_gen.median())]),
         ("wrong below their q25", df[~df.wrong | (df.n_gen <= wrong.n_gen.quantile(0.25))]),
     ]:
-        auc = roc_auc_score(sub.wrong, sub.n_gen)
-        print(f"length-only AUROC (n_gen) {label:26} {auc:.3f}  (n_wrong {int(sub.wrong.sum())})")
+        print(f"{label:32}{int(sub.wrong.sum()):>8}"
+              f"{roc_auc_score(sub.wrong, sub.n_gen):>8.3f}"
+              f"{roc_auc_score(sub.wrong, sub.restarts):>10.3f}")
 
-    # pick the loop threshold off this rather than off a guess
+    # pick the loop threshold off this
     print("\nrep over wrong traces, sorted:")
     print(" ".join(f"{v:.3f}" for v in sorted(wrong.rep, reverse=True)))
 
@@ -109,7 +95,7 @@ def main():
         for r in sample.itertuples():
             t = by_id[r.trace_id]
             f.write(f"=== {r.trace_id} | {r.cat} | level {r.level} | n_gen {r.n_gen} | "
-                    f"rep {r.rep:.3f} | max_rep {r.max_rep} | cands {r.cands}\n")
+                    f"rep {r.rep:.3f} | max_rep {r.max_rep} | restarts {r.restarts:.2f}\n")
             f.write(f"gold {t['gold']!r} got {t['answer']!r}\n")
             f.write(t["text"][: args.chars] + "\n  [...]\n" + t["text"][-args.chars :] + "\n\n")
     print(f"\nwrote {OUT_PATH} and {SAMPLE_PATH} ({len(sample)} traces to hand-check)")

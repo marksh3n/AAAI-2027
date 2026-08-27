@@ -63,9 +63,9 @@ def segment(text, offsets):
 
 
 def encode(tokenizer, trace):
-    prompt_ids = tokenizer(build_prompt(tokenizer, trace["problem"]), add_special_tokens=False)[
-        "input_ids"
-    ]
+    # the condition has to match generation or every offset shifts
+    prompt = build_prompt(tokenizer, trace["problem"], trace.get("structured", False))
+    prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     enc = tokenizer(trace["text"], add_special_tokens=False, return_offsets_mapping=True)
     return prompt_ids, enc["input_ids"], enc["offset_mapping"]
 

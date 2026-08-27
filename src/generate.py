@@ -1,5 +1,7 @@
 # colab: pip install -q math-verify
 import argparse, json, os
+from collections import Counter
+import numpy as np
 import torch
 from datasets import load_dataset
 from math_verify import parse, verify
@@ -8,6 +10,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 OUT_PATH = "data/traces.jsonl"
 INSTRUCTION = "\nPlease reason step by step, and put your final answer within \\boxed{}."
+# their configuration: numbered steps and brevity, which is what lets a small cap produce
+# a finished answer instead of a truncation. \boxed{} is kept so extraction is unchanged.
+STRUCTURED = (
+    "\nSolve step by step. Number each step as 'Step 1:', 'Step 2:', and so on. "
+    "Be brief. End with your final answer within \\boxed{}."
+)
 
 
 def extract_boxed(text):
@@ -31,9 +39,9 @@ def answers_match(pred, gold):
     return bool(verify(parse("$" + gold + "$"), parse("$" + pred + "$")))
 
 
-def build_prompt(tokenizer, question):
+def build_prompt(tokenizer, question, structured=False):
     text = tokenizer.apply_chat_template(
-        [{"role": "user", "content": question + INSTRUCTION}],
+        [{"role": "user", "content": question + (STRUCTURED if structured else INSTRUCTION)}],
         tokenize=False,
         add_generation_prompt=True,
     )
@@ -51,24 +59,97 @@ def load_problems(limit):
     return problems[:limit] if limit else problems
 
 
-def already_done():
-    if not os.path.exists(OUT_PATH):
+def load_pilot(n_fill=21, seed=0):
+    # weight toward problems the model already failed once: under resampling those are far
+    # likelier to come out mixed, and mixed-outcome problems are the only ones the
+    # within-problem test can use. fillers mirror the wrong set's level distribution so
+    # level cannot stand in for the label.
+    problems = {p["problem_id"]: p for p in load_problems(0)}
+    traces = [json.loads(line) for line in open(OUT_PATH)]
+    wrong = [t for t in traces if t["trunc"] or not t["is_correct"]]
+    picked = {t["problem_id"] for t in wrong}
+    rng = np.random.default_rng(seed)
+    for level, count in sorted(Counter(t["level"] for t in wrong).items()):
+        pool = sorted(
+            t["problem_id"] for t in traces if t["level"] == level and t["problem_id"] not in picked
+        )
+        k = min(round(n_fill * count / len(wrong)), len(pool))
+        picked |= set(rng.choice(pool, k, replace=False).tolist())
+    return [problems[i] for i in sorted(picked)]
+
+
+def already_done(path):
+    if not os.path.exists(path):
         return set()
-    with open(OUT_PATH) as f:
-        return {json.loads(line)["problem_id"] for line in f}
+    with open(path) as f:
+        return {json.loads(line)["trace_id"] for line in f}
+
+
+def out_path(tag):
+    return f"data/traces_{tag}.jsonl" if tag else OUT_PATH
+
+
+def add_args(parser):
+    parser.add_argument("--n", type=int, default=0)
+    parser.add_argument("--max-new", type=int, default=32768)
+    parser.add_argument("--samples", type=int, default=1)
+    parser.add_argument("--temp", type=float, default=0.6)
+    parser.add_argument("--tag", default="")
+    parser.add_argument("--pilot", action="store_true")
+    parser.add_argument("--structured", action="store_true")
+    return parser
+
+
+def select(args):
+    problems = load_pilot() if args.pilot else load_problems(0)
+    if args.n:
+        problems = problems[: args.n]
+    done = already_done(out_path(args.tag))
+    # a problem is written as a block of samples, so sample 0 present means the block is done
+    todo = [p for p in problems if f"{p['problem_id']}_0" not in done]
+    print(f"{len(todo)}/{len(problems)} problems left, {args.samples} samples each")
+    return todo
+
+
+def record(p, args, k, text, n_gen):
+    answer = extract_boxed(text)
+    return {
+        "trace_id": f"{p['problem_id']}_{k}",
+        "problem_id": p["problem_id"],
+        "uid": p["unique_id"],
+        "level": p["level"],
+        "subject": p["subject"],
+        "problem": p["problem"],
+        "gold": p["answer"],
+        "text": text,
+        "n_gen": n_gen,
+        "trunc": n_gen >= args.max_new or "</think>" not in text,
+        "answer": answer,
+        "is_correct": answers_match(answer, p["answer"]),
+        # extract.py has to rebuild this exact prompt, so the condition travels with the trace
+        "structured": args.structured,
+    }
+
+
+def summarise(path):
+    traces = [json.loads(line) for line in open(path)]
+    trunc = sum(t["trunc"] for t in traces)
+    wrong = sum(t["trunc"] or not t["is_correct"] for t in traces)
+    by_problem = {}
+    for t in traces:
+        by_problem.setdefault(t["problem_id"], []).append(t["trunc"] or not t["is_correct"])
+    mixed = sum(0 < sum(v) < len(v) for v in by_problem.values())
+    print(f"\n{len(traces)} traces over {len(by_problem)} problems")
+    print(f"truncated {trunc} ({trunc / len(traces):.1%}), wrong {wrong} ({wrong / len(traces):.1%})")
+    print(f"mixed-outcome problems: {mixed}/{len(by_problem)}")
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n", type=int, default=0)
+    parser = add_args(argparse.ArgumentParser())
     parser.add_argument("--bs", type=int, default=16)
-    parser.add_argument("--max-new", type=int, default=4096)
     args = parser.parse_args()
 
-    problems = load_problems(args.n)
-    done = already_done()
-    todo = [p for p in problems if p["problem_id"] not in done]
-    print(f"{len(todo)}/{len(problems)} left")
+    todo = select(args)
     if not todo:
         return
 
@@ -84,11 +165,12 @@ def main():
     torch.manual_seed(0)
 
     for p in todo:
-        p["prompt"] = build_prompt(tokenizer, p["problem"])
+        p["prompt"] = build_prompt(tokenizer, p["problem"], args.structured)
     # sort by length so each batch pads to roughly the same width
     todo.sort(key=lambda p: len(p["prompt"]))
 
-    out_file = open(OUT_PATH, "a")
+    path = out_path(args.tag)
+    out_file = open(path, "a")
     for start in range(0, len(todo), args.bs):
         batch = todo[start : start + args.bs]
         enc = tokenizer(
@@ -102,39 +184,23 @@ def main():
             out = model.generate(
                 **enc,
                 do_sample=True,
-                temperature=0.6,
+                temperature=args.temp,
                 top_p=0.95,
                 max_new_tokens=args.max_new,
+                num_return_sequences=args.samples,
                 pad_token_id=tokenizer.pad_token_id,
             )
         for i, p in enumerate(batch):
-            gen = out[i, prompt_len:]
-            eos = (gen == tokenizer.eos_token_id).nonzero()
-            n_gen = eos[0, 0].item() if len(eos) else len(gen)
-            text = tokenizer.decode(gen[:n_gen], skip_special_tokens=True)
-            answer = extract_boxed(text)
-            out_file.write(
-                json.dumps(
-                    {
-                        "trace_id": f"{p['problem_id']}_0",
-                        "problem_id": p["problem_id"],
-                        "uid": p["unique_id"],
-                        "level": p["level"],
-                        "subject": p["subject"],
-                        "problem": p["problem"],
-                        "gold": p["answer"],
-                        "text": text,
-                        "n_gen": n_gen,
-                        "trunc": n_gen >= args.max_new or "</think>" not in text,
-                        "answer": answer,
-                        "is_correct": answers_match(answer, p["answer"]),
-                    }
-                )
-                + "\n"
-            )
+            for k in range(args.samples):
+                gen = out[i * args.samples + k, prompt_len:]
+                eos = (gen == tokenizer.eos_token_id).nonzero()
+                n_gen = eos[0, 0].item() if len(eos) else len(gen)
+                text = tokenizer.decode(gen[:n_gen], skip_special_tokens=True)
+                out_file.write(json.dumps(record(p, args, k, text, n_gen)) + "\n")
         out_file.flush()
         print(f"{min(start + args.bs, len(todo))}/{len(todo)}", flush=True)
     out_file.close()
+    summarise(path)
 
 
 
