@@ -5,7 +5,7 @@ from vllm import LLM, SamplingParams
 
 from generate import MODEL, add_args, build_prompt, out_path, record, select, summarise
 
-CHUNK = 32
+CHUNK = 16
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
         max_model_len=args.max_new + 1024,
         gpu_memory_utilization=0.90,
     )
-    # n>1 shares the prompt's kv cache across a problem's samples rather than re-prefilling
+    # n>1 shares the prompt kv cache across samples
     params = SamplingParams(
         temperature=args.temp, top_p=0.95, max_tokens=args.max_new, n=args.samples, seed=0
     )

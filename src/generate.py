@@ -10,8 +10,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 OUT_PATH = "data/traces.jsonl"
 INSTRUCTION = "\nPlease reason step by step, and put your final answer within \\boxed{}."
-# their configuration: numbered steps and brevity, which is what lets a small cap produce
-# a finished answer instead of a truncation. \boxed{} is kept so extraction is unchanged.
+# numbered steps and brevity; \boxed{} kept so extraction is unchanged
 STRUCTURED = (
     "\nSolve step by step. Number each step as 'Step 1:', 'Step 2:', and so on. "
     "Be brief. End with your final answer within \\boxed{}."
@@ -60,10 +59,7 @@ def load_problems(limit):
 
 
 def load_pilot(n_fill=21, seed=0):
-    # weight toward problems the model already failed once: under resampling those are far
-    # likelier to come out mixed, and mixed-outcome problems are the only ones the
-    # within-problem test can use. fillers mirror the wrong set's level distribution so
-    # level cannot stand in for the label.
+    # failed problems resample mixed; fillers level-matched so level cannot proxy the label
     problems = {p["problem_id"]: p for p in load_problems(0)}
     traces = [json.loads(line) for line in open(OUT_PATH)]
     wrong = [t for t in traces if t["trunc"] or not t["is_correct"]]
@@ -105,7 +101,7 @@ def select(args):
     if args.n:
         problems = problems[: args.n]
     done = already_done(out_path(args.tag))
-    # a problem is written as a block of samples, so sample 0 present means the block is done
+    # samples written per problem block, so sample 0 marks it done
     todo = [p for p in problems if f"{p['problem_id']}_0" not in done]
     print(f"{len(todo)}/{len(problems)} problems left, {args.samples} samples each")
     return todo
@@ -126,7 +122,7 @@ def record(p, args, k, text, n_gen):
         "trunc": n_gen >= args.max_new or "</think>" not in text,
         "answer": answer,
         "is_correct": answers_match(answer, p["answer"]),
-        # extract.py has to rebuild this exact prompt, so the condition travels with the trace
+        # extract.py rebuilds this prompt
         "structured": args.structured,
     }
 

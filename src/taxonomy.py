@@ -1,6 +1,5 @@
-# classify wrong traces: ordinary error, degenerate loop, no answer, truncation.
-# path is duplicated rather than imported from generate/extract so this runs on a bare
-# cpu runtime without pulling in torch
+# classify wrong traces: ordinary, loop, no answer, truncation.
+# path duplicated, not imported: keeps this torch-free
 import argparse, json, re
 import pandas as pd
 from sklearn.metrics import roc_auc_score
@@ -18,8 +17,7 @@ def shingles(text):
 
 
 def classify(t, loop_rep):
-    # threshold on rep, which is a fraction, not on a raw repeat count: the same count
-    # means very different things in a 2k and a 30k token trace
+    # rep is a fraction; raw counts scale with trace length
     if t["trunc"]:
         return "truncated"
     if t["answer"] is None:
@@ -43,8 +41,7 @@ def main():
         counts = pd.Series(grams).value_counts() if grams else pd.Series(dtype=int)
         t["rep"] = 1 - len(counts) / len(grams) if grams else 0.0
         t["max_rep"] = int(counts.iloc[0]) if len(counts) else 0
-        # per 1k tokens, so this is not just length again. unlike final n_gen it is also
-        # computable online, which makes it the baseline a live monitor actually competes with
+        # per 1k tokens, and online-computable unlike final n_gen
         t["restarts"] = len(RESTART.findall(think)) / max(t["n_gen"], 1) * 1000
         t["wrong"] = bool(t["trunc"] or not t["is_correct"])
         t["cat"] = classify(t, args.loop_rep) if t["wrong"] else "correct"
@@ -67,9 +64,7 @@ def main():
     print(f"\nn_gen q25/50/75   wrong {wrong.n_gen.quantile(q).astype(int).tolist()}"
           f"   correct {ok.n_gen.quantile(q).astype(int).tolist()}")
 
-    # a loop classifier flags long traces, so dropping them lowers the length AUROC whether
-    # or not looping is the cause. the assumption-free question is whether the shorter wrong
-    # traces are still longer than correct ones, which bounds what any classifier could buy
+    # dropping long traces lowers length AUROC whatever the cause
     print(f"\n{'AUROC by subset':32}{'n_wrong':>8}{'n_gen':>8}{'restarts':>10}")
     for label, sub in [
         ("all", df),
@@ -88,7 +83,7 @@ def main():
 
     df.to_csv(OUT_PATH, index=False)
 
-    # heuristics will misfire, so dump head and tail of a sample to correct cat by hand
+    # head and tail for hand-correcting cat
     sample = wrong.sample(min(args.n, len(wrong)), random_state=0).sort_values("cat")
     by_id = {t["trace_id"]: t for t in traces}
     with open(SAMPLE_PATH, "w") as f:

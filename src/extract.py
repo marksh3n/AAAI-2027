@@ -4,15 +4,31 @@ import pandas as pd
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from generate import MODEL, build_prompt
+from generate import MODEL, build_prompt, out_path
+from taxonomy import RESTART
 
 TRACES_PATH = "data/traces.jsonl"
 ACTS_PATH = "data/acts.npy"
 META_PATH = "data/meta.parquet"
 PARTS_DIR = "data/parts"
 LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # decoder block index; -1 is the embedding output
+# absolute generation offsets; length-so-far is constant across traces
+POSITIONS = [128, 256, 512, 1024, 2048, 4096]
 MIN_STEP_TOKENS = 5
 CHUNK = 1024
+
+
+def paths(tag):
+    s = f"_{tag}" if tag else ""
+    return out_path(tag), f"data/acts{s}.npy", f"data/meta{s}.parquet", f"data/parts{s}"
+
+
+def shared_prefix(seqs):
+    # tokens shared by every sample of a problem
+    n = 0
+    while all(len(s) > n and s[n] == seqs[0][n] for s in seqs):
+        n += 1
+    return n
 
 
 def step_spans(text):
@@ -63,7 +79,7 @@ def segment(text, offsets):
 
 
 def encode(tokenizer, trace):
-    # the condition has to match generation or every offset shifts
+    # must match generation or offsets shift
     prompt = build_prompt(tokenizer, trace["problem"], trace.get("structured", False))
     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     enc = tokenizer(trace["text"], add_special_tokens=False, return_offsets_mapping=True)
@@ -128,12 +144,61 @@ def check(tokenizer, model, device, trace):
         print(f"{i:4d} | {want!r:26} | {got!r}{flag}")
 
 
+def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir):
+    os.makedirs(parts_dir, exist_ok=True)
+    ids = {}
+    for n, trace in enumerate(traces):
+        prompt_ids, trace_ids, _ = encode(tokenizer, trace)
+        ids[n] = trace_ids
+        part = f"{parts_dir}/{n}.npy"
+        if os.path.exists(part):
+            continue
+        idx = [p for p in POSITIONS if p < len(trace_ids)]
+        np.save(part, activations(model, device, prompt_ids, trace_ids, idx))
+        if n % 25 == 0:
+            print(f"{n}/{len(traces)}", flush=True)
+
+    rows, acts = [], []
+    for n, trace in enumerate(traces):
+        h = np.load(f"{parts_dir}/{n}.npy")
+        for j, pos in enumerate([p for p in POSITIONS if p < len(ids[n])]):
+            prefix = tokenizer.decode(ids[n][:pos])
+            rows.append(
+                {
+                    "trace_id": trace["trace_id"],
+                    "problem_id": trace["problem_id"],
+                    "level": trace["level"],
+                    "pos": pos,
+                    "is_correct": trace["is_correct"],
+                    "n_gen": trace["n_gen"],
+                    "prefix": prefix,
+                    "restarts": len(RESTART.findall(prefix)) / pos * 1000,
+                    "row": len(rows),
+                }
+            )
+        acts.append(h)
+
+    by_problem = {}
+    for n, trace in enumerate(traces):
+        by_problem.setdefault(trace["problem_id"], []).append(ids[n])
+    sp = sorted(shared_prefix(v) for v in by_problem.values() if len(v) > 1)
+    print(f"shared prefix across a problem's samples: median {sp[len(sp) // 2]}, max {max(sp)}")
+
+    acts = np.concatenate(acts)
+    np.save(acts_path, acts)
+    pd.DataFrame(rows).to_parquet(meta_path)
+    print(f"{len(rows)} rows, acts {acts.shape}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--fixed", action="store_true")
+    parser.add_argument("--tag", default="")
     args = parser.parse_args()
 
-    traces = [json.loads(line) for line in open(TRACES_PATH)]
+    traces_path, acts_path, meta_path, parts_dir = paths(args.tag)
+    traces = [json.loads(line) for line in open(traces_path)]
     n_trunc = sum(t["trunc"] for t in traces)
     print(f"truncated {n_trunc}/{len(traces)} ({n_trunc / len(traces):.1%}), counted as incorrect")
     kept = traces
@@ -144,6 +209,9 @@ def main():
     tokenizer, model, device = load_model()
     if args.check:
         check(tokenizer, model, device, kept[0])
+        return
+    if args.fixed:
+        fixed(tokenizer, model, device, kept, acts_path, meta_path, parts_dir)
         return
 
     # one file per trace so a crash or a colab disconnect costs one trace, not the run
