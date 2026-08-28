@@ -5,7 +5,7 @@ from vllm import LLM, SamplingParams
 
 from generate import MODEL, add_args, build_prompt, out_path, record, select, summarise
 
-CHUNK = 16
+CHUNK = 8
 
 
 def main():
