@@ -12,6 +12,7 @@ LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]
 POSITIONS = [128, 256, 512, 1024, 2048, 4096]
 N_OUTER = 5
 N_INNER = 3
+CS = [0.001, 0.01, 0.1, 1.0]
 MIN_PAIRS = 20
 SEED = 0
 
@@ -64,11 +65,11 @@ def fit_score(x_tr, y_tr, x_te, C=1.0):
     return model.fit(x_tr, y_tr).predict_proba(x_te)[:, 1]
 
 
-def scores(cell, feats, tr_ids, te_ids):
+def scores(cell, feats, tr_ids, te_ids, C=1.0):
     tr, te = cell[cell.problem_id.isin(tr_ids)], cell[cell.problem_id.isin(te_ids)]
     if tr.y.nunique() < 2 or not len(te):
         return None
-    return te.assign(p=fit_score(feats[tr.row.values], tr.y.values, feats[te.row.values]))
+    return te.assign(p=fit_score(feats[tr.row.values], tr.y.values, feats[te.row.values], C))
 
 
 def tfidf(cell, tr_ids, te_ids):
@@ -88,18 +89,20 @@ def nested(cell, feats_by_layer, outer, mixed):
         if not te_mixed:
             continue
         best, best_cv = None, -1
+        # 1536 dims against ~2k rows, so C matters more than the layer does
         for layer, feats in zip(LAYERS, feats_by_layer):
-            inner = []
-            for i_tr, i_te in folds(tr, N_INNER):
-                s = scores(cell, feats, i_tr, [p for p in i_te if p in mixed])
-                if s is not None:
-                    inner.append(auroc(pair_counts(s)))
-            cv = np.nanmean(inner) if inner and not np.all(np.isnan(inner)) else np.nan
-            if not np.isnan(cv) and cv > best_cv:
-                best, best_cv = layer, cv
+            for C in CS:
+                inner = []
+                for i_tr, i_te in folds(tr, N_INNER):
+                    s = scores(cell, feats, i_tr, [p for p in i_te if p in mixed], C)
+                    if s is not None:
+                        inner.append(auroc(pair_counts(s)))
+                cv = np.nanmean(inner) if inner and not np.all(np.isnan(inner)) else np.nan
+                if not np.isnan(cv) and cv > best_cv:
+                    best, best_cv = (layer, C), cv
         if best is None:
             continue
-        s = scores(cell, feats_by_layer[LAYERS.index(best)], tr, te_mixed)
+        s = scores(cell, feats_by_layer[LAYERS.index(best[0])], tr, te_mixed, best[1])
         if s is not None:
             parts.append(s)
             picked.append(best)
@@ -126,9 +129,9 @@ def main():
     ids = np.array(sorted(meta.problem_id.unique()))
     np.random.default_rng(SEED).shuffle(ids)
     outer = folds(ids, N_OUTER)
-    print(f"{N_OUTER}-fold outer CV, {N_INNER}-fold inner for layer choice\n")
+    print(f"{N_OUTER}-fold outer CV, {N_INNER}-fold inner over layer x C\n")
 
-    print(f"{'pos':>5}{'pairs':>7}{'layers':>22}{'auroc':>7}{'95% CI':>16}{'d':>7}"
+    print(f"{'pos':>5}{'pairs':>7}{'(layer, C)':>34}{'auroc':>7}{'95% CI':>16}{'d':>7}"
           f"{'tfidf':>8}{'restart':>8}{'n_gen':>8}{'shuf':>7}")
     out = []
     for pos in POSITIONS:
@@ -154,8 +157,8 @@ def main():
         lab = shuf.groupby("trace_id").y.first()
         perm = np.random.default_rng(SEED + 1).permutation(lab.values)
         shuf["y"] = shuf.trace_id.map(dict(zip(lab.index, perm)))
-        sh = pd.concat([r for r in (scores(shuf, feats_by_layer[LAYERS.index(top)], tr,
-                                           [p for p in te if p in mixed])
+        sh = pd.concat([r for r in (scores(shuf, feats_by_layer[LAYERS.index(top[0])], tr,
+                                           [p for p in te if p in mixed], top[1])
                                     for tr, te in outer) if r is not None])
 
         row = {
@@ -173,7 +176,7 @@ def main():
         }
         out.append(row)
         ci = row["ci"]
-        print(f"{pos:>5}{row['pairs']:>7}{str(picked):>22}{row['auroc']:>7.3f}"
+        print(f"{pos:>5}{row['pairs']:>7}{str(picked):>34}{row['auroc']:>7.3f}"
               f"{f'[{ci[0]:.2f}, {ci[1]:.2f}]':>16}{row['d']:>7.2f}"
               f"{row['tfidf']:>8.3f}{row['restarts']:>8.3f}"
               f"{row['n_gen_oracle']:>8.3f}{row['shuffled']:>7.3f}", flush=True)
