@@ -154,7 +154,9 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir):
         if os.path.exists(part):
             continue
         idx = [p for p in POSITIONS if p < len(trace_ids)]
-        np.save(part, activations(model, device, prompt_ids, trace_ids, idx))
+        # attention is causal, so state at position p ignores everything after it: feeding
+        # the tail of a 32k trace only to read position 4096 is wasted compute
+        np.save(part, activations(model, device, prompt_ids, trace_ids[: max(POSITIONS) + 1], idx))
         if n % 25 == 0:
             print(f"{n}/{len(traces)}", flush=True)
 
