@@ -3,6 +3,7 @@
 import argparse
 import numpy as np
 import pandas as pd
+from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
@@ -60,16 +61,20 @@ def boot_ci(counts, n=2000):
     return [float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))]
 
 
-def fit_score(x_tr, y_tr, x_te, C=1.0):
-    model = make_pipeline(StandardScaler(with_mean=False), LogisticRegression(C=C, max_iter=2000))
-    return model.fit(x_tr, y_tr).predict_proba(x_te)[:, 1]
+def fit_score(x_tr, y_tr, x_te, C=1.0, svd=0):
+    # svd is fitted inside the fold, never on the test problems
+    steps = [StandardScaler(with_mean=False)]
+    if svd:
+        steps.append(TruncatedSVD(n_components=svd, random_state=SEED))
+    steps.append(LogisticRegression(C=C, max_iter=2000))
+    return make_pipeline(*steps).fit(x_tr, y_tr).predict_proba(x_te)[:, 1]
 
 
-def scores(cell, feats, tr_ids, te_ids, C=1.0):
+def scores(cell, feats, tr_ids, te_ids, C=1.0, svd=0):
     tr, te = cell[cell.problem_id.isin(tr_ids)], cell[cell.problem_id.isin(te_ids)]
     if tr.y.nunique() < 2 or not len(te):
         return None
-    return te.assign(p=fit_score(feats[tr.row.values], tr.y.values, feats[te.row.values], C))
+    return te.assign(p=fit_score(feats[tr.row.values], tr.y.values, feats[te.row.values], C, svd))
 
 
 def tfidf(cell, tr_ids, te_ids):
@@ -80,7 +85,7 @@ def tfidf(cell, tr_ids, te_ids):
     return te.assign(p=fit_score(vec.fit_transform(tr.prefix), tr.y.values, vec.transform(te.prefix)))
 
 
-def nested(cell, feats_by_layer, outer, mixed):
+def nested(cell, feats_by_layer, outer, mixed, svd=0):
     # inner folds pick the layer, outer folds score it. with ~38 mixed problems a single
     # held-out split leaves too few to read, so every problem serves as test once.
     parts, picked = [], []
@@ -94,7 +99,7 @@ def nested(cell, feats_by_layer, outer, mixed):
             for C in CS:
                 inner = []
                 for i_tr, i_te in folds(tr, N_INNER):
-                    s = scores(cell, feats, i_tr, [p for p in i_te if p in mixed], C)
+                    s = scores(cell, feats, i_tr, [p for p in i_te if p in mixed], C, svd)
                     if s is not None:
                         inner.append(auroc(pair_counts(s)))
                 cv = np.nanmean(inner) if inner and not np.all(np.isnan(inner)) else np.nan
@@ -102,7 +107,7 @@ def nested(cell, feats_by_layer, outer, mixed):
                     best, best_cv = (layer, C), cv
         if best is None:
             continue
-        s = scores(cell, feats_by_layer[LAYERS.index(best[0])], tr, te_mixed, best[1])
+        s = scores(cell, feats_by_layer[LAYERS.index(best[0])], tr, te_mixed, best[1], svd)
         if s is not None:
             parts.append(s)
             picked.append(best)
@@ -112,6 +117,7 @@ def nested(cell, feats_by_layer, outer, mixed):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", default="B")
+    parser.add_argument("--svd", type=int, default=0)
     args = parser.parse_args()
 
     s = f"_{args.tag}" if args.tag else ""
@@ -129,7 +135,8 @@ def main():
     ids = np.array(sorted(meta.problem_id.unique()))
     np.random.default_rng(SEED).shuffle(ids)
     outer = folds(ids, N_OUTER)
-    print(f"{N_OUTER}-fold outer CV, {N_INNER}-fold inner over layer x C\n")
+    print(f"{N_OUTER}-fold outer CV, {N_INNER}-fold inner over layer x C"
+          + (f", SVD to {args.svd} components\n" if args.svd else "\n"))
 
     print(f"{'pos':>5}{'pairs':>7}{'(layer, C)':>34}{'auroc':>7}{'95% CI':>16}{'d':>7}"
           f"{'tfidf':>8}{'restart':>8}{'n_gen':>8}{'shuf':>7}")
@@ -138,7 +145,7 @@ def main():
         cell = meta[meta.pos == pos]
         if not len(cell):
             continue
-        scored, picked = nested(cell, feats_by_layer, outer, mixed)
+        scored, picked = nested(cell, feats_by_layer, outer, mixed, args.svd)
         if scored is None:
             print(f"{pos:>5}  skipped: no fold had both outcomes")
             continue
@@ -158,7 +165,7 @@ def main():
         perm = np.random.default_rng(SEED + 1).permutation(lab.values)
         shuf["y"] = shuf.trace_id.map(dict(zip(lab.index, perm)))
         sh = pd.concat([r for r in (scores(shuf, feats_by_layer[LAYERS.index(top[0])], tr,
-                                           [p for p in te if p in mixed], top[1])
+                                           [p for p in te if p in mixed], top[1], args.svd)
                                     for tr, te in outer) if r is not None])
 
         row = {
