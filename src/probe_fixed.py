@@ -9,6 +9,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from cache import StaleCache, check_dataset_manifest, short
+
 LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]
 POSITIONS = [128, 256, 512, 1024, 2048, 4096]
 N_OUTER = 5
@@ -118,11 +120,28 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", default="B")
     parser.add_argument("--svd", type=int, default=0)
+    parser.add_argument("--strict", action="store_true",
+                        help="also re-hash acts.npy against the dataset manifest")
     args = parser.parse_args()
 
     s = f"_{args.tag}" if args.tag else ""
-    meta = pd.read_parquet(f"data/meta{s}.parquet")
-    acts = np.load(f"data/acts{s}.npy", mmap_mode="r")
+    meta_path, acts_path = f"data/meta{s}.parquet", f"data/acts{s}.npy"
+    meta = pd.read_parquet(meta_path)
+    acts = np.load(acts_path, mmap_mode="r")
+    # the labels here are joined to the activations by row index alone, so establish first
+    # that this meta and this acts were written by one extraction under one config
+    dm = check_dataset_manifest(meta_path, acts_path, meta.trace_id.tolist(), acts.shape,
+                                strict=args.strict)
+    if not (meta.row.values == np.arange(len(meta))).all():
+        raise StaleCache("meta.row is not 0..n-1, so it cannot index acts.npy")
+    # LAYERS and POSITIONS are duplicated here to stay torch-free; check the copies agree
+    # with the ones the activations were actually extracted at
+    for name, mine in [("layers", LAYERS), ("positions", POSITIONS)]:
+        theirs = dm["config"].get(name)
+        if theirs != mine:
+            raise StaleCache(f"probe_fixed {name.upper()} = {mine} but acts{s}.npy was "
+                             f"extracted with {theirs}")
+    print(f"dataset config {short(dm['config_hash'])}, extracted {dm['written']}")
     meta["y"] = (~meta.is_correct.astype(bool)).astype(int)
     feats_by_layer = [np.asarray(acts[:, i, :], dtype=np.float32) for i in range(len(LAYERS))]
 

@@ -7,6 +7,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from cache import StaleCache, check_dataset_manifest, short
 from extract import ACTS_PATH, LAYERS, META_PATH, TRACES_PATH
 
 RESULTS_PATH = "data/results.parquet"
@@ -151,6 +152,14 @@ def shuffled(meta):
 def main():
     meta = pd.read_parquet(META_PATH)
     acts = np.load(ACTS_PATH, mmap_mode="r")
+    # rows index acts positionally, so prove the two files came from one extraction
+    dm = check_dataset_manifest(META_PATH, ACTS_PATH, meta.trace_id.tolist(), acts.shape)
+    if not (meta.row.values == np.arange(len(meta))).all():
+        raise StaleCache("meta.row is not 0..n-1, so it cannot index acts.npy")
+    if dm["config"].get("layers") != LAYERS:
+        raise StaleCache(f"LAYERS = {LAYERS} but acts.npy was extracted with "
+                         f"{dm['config'].get('layers')}")
+    print(f"dataset config {short(dm['config_hash'])}, extracted {dm['written']}")
     meta["y"] = (~meta.is_correct.astype(bool)).astype(int)
     meta["rel"] = meta.step_idx / meta.n_steps
     meta["bin"] = np.clip((meta.rel * N_BINS).astype(int), 0, N_BINS - 1)
