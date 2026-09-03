@@ -12,7 +12,9 @@ ACTS_PATH = "data/acts.npy"
 META_PATH = "data/meta.parquet"
 PARTS_DIR = "data/parts"
 LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # decoder block index; -1 is the embedding output
-# absolute generation offsets; length-so-far is constant across traces
+# absolute generation offsets, defined as TOKENS OBSERVED (a 1-indexed count).
+# pos=128 means "after seeing 128 tokens" -> hidden state at trace_ids[127],
+# text prefix trace_ids[:128]. Both then reflect exactly the same 128 tokens.
 POSITIONS = [128, 256, 512, 1024, 2048, 4096]
 MIN_STEP_TOKENS = 5
 CHUNK = 1024
@@ -153,17 +155,28 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir):
         part = f"{parts_dir}/{n}.npy"
         if os.path.exists(part):
             continue
-        idx = [p for p in POSITIONS if p < len(trace_ids)]
+        # pos is tokens observed (1-indexed count): need at least pos tokens to exist,
+        # so the cutoff is <=, not <. The hidden state for a pos-token prefix lives at
+        # 0-indexed token pos - 1.
+        positions = [p for p in POSITIONS if p <= len(trace_ids)]
+        token_idx = [p - 1 for p in positions]
         # attention is causal, so state at position p ignores everything after it: feeding
         # the tail of a 32k trace only to read position 4096 is wasted compute
-        np.save(part, activations(model, device, prompt_ids, trace_ids[: max(POSITIONS) + 1], idx))
+        np.save(part, activations(model, device, prompt_ids, trace_ids[: max(POSITIONS) + 1], token_idx))
         if n % 25 == 0:
             print(f"{n}/{len(traces)}", flush=True)
 
     rows, acts = [], []
     for n, trace in enumerate(traces):
         h = np.load(f"{parts_dir}/{n}.npy")
-        for j, pos in enumerate([p for p in POSITIONS if p < len(ids[n])]):
+        positions = [p for p in POSITIONS if p <= len(ids[n])]
+        # h[j] was extracted at token index positions[j] - 1, and prefix below is
+        # ids[n][:positions[j]] -- both must represent the same pos-token prefix.
+        assert len(h) == len(positions), (
+            f"trace {n}: {len(h)} activations but {len(positions)} positions "
+            f"({len(ids[n])} trace tokens) -- activation/text prefixes are out of sync"
+        )
+        for j, pos in enumerate(positions):
             prefix = tokenizer.decode(ids[n][:pos])
             rows.append(
                 {
