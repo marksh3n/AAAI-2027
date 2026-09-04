@@ -248,7 +248,7 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
     # random sample and compare. a part holding some other trace's activations, or one
     # written under a different model or prompt, does not survive this.
     cfg, cfg_hash = config_fingerprint(tokenizer, device, mode)
-    print(f"verifying {parts_dir} against config {short(cfg_hash)} (mode {mode})\n")
+    print(f"verifying {parts_dir} against config {short(cfg_hash)} (mode {mode})\n", flush=True)
 
     want, plan, missing, broken = {}, {}, [], []
     for n, trace in enumerate(traces):
@@ -272,20 +272,20 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
     skip = {n for n, _ in broken} | set(missing)
     usable = [n for n in range(len(traces)) if n not in skip]
     print(f"{len(usable)}/{len(traces)} parts present with the expected shape, "
-          f"{len(missing)} missing, {len(broken)} wrong shape")
+          f"{len(missing)} missing, {len(broken)} wrong shape", flush=True)
     for n, why in broken[:10]:
         print(f"  part {n} ({traces[n]['trace_id']}): {why}")
     if len(broken) > 10:
         print(f"  ... and {len(broken) - 10} more")
     warn_orphans(parts_dir, len(traces))
     if not usable:
-        print("\nnothing to verify")
+        print("\nnothing to verify", flush=True)
         return
 
     rng = np.random.default_rng(seed)
     sample = sorted(rng.choice(usable, min(n_verify, len(usable)), replace=False).tolist())
-    print(f"\nre-extracting {len(sample)} sampled parts and comparing against the cache")
-    print(f"{'part':>6}{'trace_id':>12}{'min cos':>10}{'max |d|':>10}{'exact':>8}  verdict")
+    print(f"\nre-extracting {len(sample)} sampled parts and comparing against the cache", flush=True)
+    print(f"{'part':>6}{'trace_id':>12}{'min cos':>10}{'max |d|':>10}{'exact':>8}  verdict", flush=True)
     worst = 1.0
     for n in sample:
         prompt_ids, feed, token_idx = plan[n]
@@ -298,12 +298,12 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
         print(f"{n:>6}{traces[n]['trace_id']:>12}{cos.min():>10.4f}{mx:>10.3f}{exact:>8.1%}"
               f"  {'ok' if cos.min() >= VERIFY_MIN_COS else 'MISMATCH'}", flush=True)
 
-    print(f"\nworst cosine {worst:.4f} over {len(sample)} parts (threshold {VERIFY_MIN_COS})")
+    print(f"\nworst cosine {worst:.4f} over {len(sample)} parts (threshold {VERIFY_MIN_COS})", flush=True)
     if worst < VERIFY_MIN_COS or broken:
         print("NOT VERIFIED: this cache does not reproduce. Re-extract with --rebuild; any "
-              "result already computed from it should be treated as unverified.")
+              "result already computed from it should be treated as unverified.", flush=True)
         return
-    print("the sampled parts reproduce a fresh forward pass")
+    print("the sampled parts reproduce a fresh forward pass", flush=True)
     if not adopt:
         print("re-run with --adopt to stamp a manifest so these parts can be reused")
         return
@@ -340,13 +340,14 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
         entry["sha256"] = sha_file(part)
         manifest["parts"][str(n)] = entry
     save_manifest(parts_dir, manifest)
-    print(f"stamped {len(usable)} parts into {manifest_path(parts_dir)}")
+    print(f"stamped {len(usable)} parts into {manifest_path(parts_dir)}", flush=True)
 
 
 def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, rebuild=False):
     cfg, cfg_hash = config_fingerprint(tokenizer, device, "fixed")
     manifest = load_manifest(parts_dir, cfg, cfg_hash, rebuild)
-    print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest")
+    print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest",
+          flush=True)
     save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves a readable cache
 
     ids, want, pos_by_n, reused, written = {}, {}, {}, 0, 0
@@ -379,7 +380,7 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
         if n % 25 == 0:
             print(f"{n}/{len(traces)}", flush=True)
     save_manifest(parts_dir, manifest)
-    print(f"reused {reused}/{len(traces)} validated parts, extracted {written}")
+    print(f"reused {reused}/{len(traces)} validated parts, extracted {written}", flush=True)
     warn_orphans(parts_dir, len(traces))
 
     rows, acts = [], []
@@ -426,13 +427,14 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     df = pd.DataFrame(rows)
     df.to_parquet(meta_path)
     write_dataset_manifest(meta_path, acts_path, cfg, cfg_hash, df.trace_id.tolist(), acts.shape)
-    print(f"{len(rows)} rows, acts {acts.shape}")
+    print(f"{len(rows)} rows, acts {acts.shape}", flush=True)
 
 
 def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, rebuild=False):
     cfg, cfg_hash = config_fingerprint(tokenizer, device, "steps")
     manifest = load_manifest(parts_dir, cfg, cfg_hash, rebuild)
-    print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest")
+    print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest",
+          flush=True)
     save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves a readable cache
 
     # one file per trace so a crash or a colab disconnect costs one trace, not the run
@@ -457,7 +459,7 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
         if n % 25 == 0:
             print(f"{n}/{len(traces)}", flush=True)
     save_manifest(parts_dir, manifest)
-    print(f"reused {reused}/{len(traces)} validated parts, extracted {written}")
+    print(f"reused {reused}/{len(traces)} validated parts, extracted {written}", flush=True)
     warn_orphans(parts_dir, len(traces))
 
     rows, acts = [], []
@@ -486,7 +488,7 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     df = pd.DataFrame(rows)
     df.to_parquet(meta_path)
     write_dataset_manifest(meta_path, acts_path, cfg, cfg_hash, df.trace_id.tolist(), acts.shape)
-    print(f"{len(rows)} steps, acts {acts.shape}")
+    print(f"{len(rows)} steps, acts {acts.shape}", flush=True)
 
 
 def main():
@@ -506,7 +508,7 @@ def main():
     traces_path, acts_path, meta_path, parts_dir = paths(args.tag)
     traces = [json.loads(line) for line in open(traces_path)]
     n_trunc = sum(t["trunc"] for t in traces)
-    print(f"truncated {n_trunc}/{len(traces)} ({n_trunc / len(traces):.1%}), counted as incorrect")
+    print(f"truncated {n_trunc}/{len(traces)} ({n_trunc / len(traces):.1%}), counted as incorrect", flush=True)
     kept = traces
     for t in kept:
         if t["trunc"]:
