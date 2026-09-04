@@ -38,6 +38,10 @@ EXTRACTOR_VERSION = 2
 # cosine separates the two cleanly where exact equality would not.
 VERIFY_MIN_COS = 0.99
 VERIFY_N = 8
+# the manifest is rewritten whole, and data/ is usually a Drive FUSE mount where that is
+# far slower than the .npy write. batching costs at most this many re-extracted traces
+# after a disconnect, since an unrecorded part is treated as absent.
+MANIFEST_EVERY = 10
 
 
 def paths(tag):
@@ -343,8 +347,9 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     cfg, cfg_hash = config_fingerprint(tokenizer, device, "fixed")
     manifest = load_manifest(parts_dir, cfg, cfg_hash, rebuild)
     print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest")
+    save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves a readable cache
 
-    ids, want, pos_by_n, reused = {}, {}, {}, 0
+    ids, want, pos_by_n, reused, written = {}, {}, {}, 0, 0
     for n, trace in enumerate(traces):
         prompt_ids, trace_ids, _ = encode(tokenizer, trace)
         ids[n] = trace_ids
@@ -368,10 +373,13 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
         # the tail of a 32k trace only to read position 4096 is wasted compute
         np.save(part, activations(model, device, prompt_ids, trace_ids[: max(POSITIONS) + 1], token_idx))
         record_part(manifest, n, part, trace, trace_ids, token_idx)
-        save_manifest(parts_dir, manifest)
+        written += 1
+        if written % MANIFEST_EVERY == 0:
+            save_manifest(parts_dir, manifest)
         if n % 25 == 0:
             print(f"{n}/{len(traces)}", flush=True)
-    print(f"reused {reused}/{len(traces)} validated parts")
+    save_manifest(parts_dir, manifest)
+    print(f"reused {reused}/{len(traces)} validated parts, extracted {written}")
     warn_orphans(parts_dir, len(traces))
 
     rows, acts = [], []
@@ -425,9 +433,10 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     cfg, cfg_hash = config_fingerprint(tokenizer, device, "steps")
     manifest = load_manifest(parts_dir, cfg, cfg_hash, rebuild)
     print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest")
+    save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves a readable cache
 
     # one file per trace so a crash or a colab disconnect costs one trace, not the run
-    want, reused = {}, 0
+    want, reused, written = {}, 0, 0
     for n, trace in enumerate(traces):
         prompt_ids, trace_ids, offsets = encode(tokenizer, trace)
         spans, token_idx = segment(trace["text"], offsets)
@@ -442,10 +451,13 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
             print(f"re-extracting {n} ({trace['trace_id']}): {why}", flush=True)
         np.save(part, activations(model, device, prompt_ids, trace_ids, token_idx))
         record_part(manifest, n, part, trace, trace_ids, token_idx)
-        save_manifest(parts_dir, manifest)
+        written += 1
+        if written % MANIFEST_EVERY == 0:
+            save_manifest(parts_dir, manifest)
         if n % 25 == 0:
             print(f"{n}/{len(traces)}", flush=True)
-    print(f"reused {reused}/{len(traces)} validated parts")
+    save_manifest(parts_dir, manifest)
+    print(f"reused {reused}/{len(traces)} validated parts, extracted {written}")
     warn_orphans(parts_dir, len(traces))
 
     rows, acts = [], []
