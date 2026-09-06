@@ -1,4 +1,4 @@
-import json, os, re
+import json, os
 from collections import Counter
 import numpy as np
 import pandas as pd
@@ -9,6 +9,7 @@ from sklearn.preprocessing import StandardScaler
 
 from cache import StaleCache, check_dataset_manifest, short
 from extract import ACTS_PATH, LAYERS, META_PATH, TRACES_PATH
+from taxonomy import RESTART
 
 RESULTS_PATH = "data/results.parquet"
 SUMMARY_PATH = "data/summary.json"
@@ -16,7 +17,6 @@ N_BINS = 8
 CS = [0.01, 0.1, 1.0]
 K_FOLDS = 5
 SEED = 0
-SELF_CORRECT = re.compile(r"\b(wait|hold on|let me re|actually)\b", re.I)
 
 
 def make_splits(problem_ids):
@@ -51,17 +51,21 @@ def run_grid(meta, acts, dev, bins=range(N_BINS)):
     # K-fold CV over dev for cell selection: one val split has too few errors to pick
     # the best of ~200 cells without landing on noise
     splits = folds(dev)
+    # neither the bin nor the fold membership depends on layer or C, so slice once
+    # instead of re-filtering for all 27 layer x C combinations
+    cells = {}
+    for b in bins:
+        cell = meta[meta.bin == b]
+        cells[b] = [(cell[cell.problem_id.isin(tr_ids)], cell[cell.problem_id.isin(va_ids)])
+                    for tr_ids, va_ids in splits]
     out = []
     for layer_pos, layer in enumerate(LAYERS):
         feats = np.asarray(acts[:, layer_pos, :], dtype=np.float32)
         print(f"  layer {layer}", flush=True)
         for b in bins:
-            cell = meta[meta.bin == b]
             for C in CS:
                 scores = []
-                for tr_ids, va_ids in splits:
-                    tr = cell[cell.problem_id.isin(tr_ids)]
-                    va = cell[cell.problem_id.isin(va_ids)]
+                for tr, va in cells[b]:
                     if tr.y.nunique() < 2 or va.y.nunique() < 2:
                         continue
                     model = fit(feats[tr.row.values], tr.y.values, C)
@@ -190,16 +194,15 @@ def main():
 
     traces = [json.loads(line) for line in open(TRACES_PATH)]
     summary["truncation_rate"] = sum(t["trunc"] for t in traces) / len(traces)
-    kept = traces
-    for t in kept:
+    for t in traces:
         if t["trunc"]:
             t["is_correct"] = False
-    summary["accuracy"] = sum(t["is_correct"] for t in kept) / len(kept)
+    summary["accuracy"] = sum(t["is_correct"] for t in traces) / len(traces)
     summary["self_correction_rate"] = sum(
-        bool(SELF_CORRECT.search(t["text"].split("</think>")[0])) for t in kept
-    ) / len(kept)
+        bool(RESTART.search(t["text"].split("</think>")[0])) for t in traces
+    ) / len(traces)
 
-    by_level = Counter((t["level"], t["is_correct"]) for t in kept)
+    by_level = Counter((t["level"], t["is_correct"]) for t in traces)
     summary["by_level"] = {
         str(l): {"n": by_level[(l, True)] + by_level[(l, False)], "wrong": by_level[(l, False)]}
         for l in (3, 4, 5)

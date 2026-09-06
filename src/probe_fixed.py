@@ -19,11 +19,8 @@ N_INNER = 3
 CS = [0.001, 0.01, 0.1, 1.0]
 MIN_PAIRS = 20
 SEED = 0
-# the ablation compares two arms on identical folds:
-#   TR  = prefix text (tf-idf) + restart density
-#   TRH = the same, plus hidden states
-# n_gen is deliberately absent from both: it is the FINAL trace length, which a monitor
-# reading a prefix at token 128 cannot know. it was an oracle, not a baseline.
+# TR = prefix tf-idf + restart density. TRH = TR + hidden states.
+# n_gen excluded: final trace length, not online-observable.
 ARMS = ("TR", "TRH")
 ABLATION_LAYER = 16
 ABLATION_SVD = 50
@@ -69,6 +66,10 @@ def paired_d(df):
     return diffs.mean() / sd if sd > 1e-9 else np.nan
 
 
+def sd(values):
+    return float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+
+
 def boot_ci(counts, n=2000):
     # resample problems: pairs within a problem are dependent
     rng = np.random.default_rng(SEED)
@@ -101,9 +102,7 @@ def tfidf(cell, tr_ids, te_ids):
 
 
 def yield_table(meta):
-    # later positions are length-selected subsamples: a trace only has a row at 4096 if it
-    # ran that long, and wrong traces are far longer here. the denominators are not
-    # comparable across positions, so print them next to every AUROC.
+    # later positions are length-selected: denominators differ across pos
     per = meta.groupby(["pos", "trace_id"], as_index=False).agg(
         y=("y", "first"), pid=("problem_id", "first")
     )
@@ -123,9 +122,8 @@ def yield_table(meta):
 
 
 def split_features(cell, hidden, tr_ids, te_ids, svd):
-    # every transform is fitted on the training problems only: the tf-idf vocabulary and
-    # the SVD basis never see a test problem. built once per split and shared by both arms
-    # so they differ in features alone, never in the split or the text representation.
+    # tf-idf vocab and SVD basis fitted on train only.
+    # built once per split, shared by both arms.
     tr = cell[cell.problem_id.isin(tr_ids)]
     te = cell[cell.problem_id.isin(te_ids)]
     if tr.y.nunique() < 2 or not len(te):
@@ -159,7 +157,7 @@ def score_arm(X_tr, X_te, tr, te, C):
 
 
 def pick_cs(cell, hidden, tr_ids, mixed, svd):
-    # C is chosen inside the training problems only, per arm, on identical inner splits
+    # C picked inside train only, per arm, on identical inner splits
     per = {(a, C): [] for a in ARMS for C in CS}
     for i_tr, i_te in folds(tr_ids, N_INNER):
         built = split_features(cell, hidden, i_tr, [p for p in i_te if p in mixed], svd)
@@ -198,8 +196,7 @@ def run_position(cell, hidden, outer, mixed, svd):
 
 
 def paired_delta(a_scored, b_scored, n=2000):
-    # resamples the SAME problems for both arms, so the difference is paired and the
-    # between-problem variance that both arms share cancels instead of inflating the CI
+    # resamples the same problems for both arms, so the delta is paired
     ca, pa = pair_counts(a_scored, True)
     cb, pb = pair_counts(b_scored, True)
     ib = {q: i for i, q in enumerate(pb)}
@@ -220,9 +217,7 @@ def paired_delta(a_scored, b_scored, n=2000):
 
 
 def permute_within_problem(hidden, cell, rng):
-    # destroys the within-problem association between activation and trace while keeping
-    # the feature distribution, the dimensionality and any between-problem structure.
-    # this is the null the within-problem AUROC is actually measured against.
+    # breaks the within-problem activation/trace link, keeps distribution and rank
     out = hidden.copy()
     for _, g in cell.groupby("problem_id"):
         rows = g.row.values
@@ -231,9 +226,8 @@ def permute_within_problem(hidden, cell, rng):
 
 
 def null_deltas(cell, hidden, ids, mixed, svd, reps, n_seeds):
-    # concatenating 50 uninformative columns still moves the fit: at this sample size that
-    # is worth several AUROC points, and the paired bootstrap over problems cannot see it
-    # because it resamples problems, not model fits. so measure it directly.
+    # 50 junk columns move the fit by several AUROC points at this n.
+    # the paired bootstrap resamples problems, not fits, so it misses this.
     out = []
     for rep in range(reps):
         h = permute_within_problem(hidden, cell, np.random.default_rng(1000 + rep))
@@ -246,15 +240,15 @@ def null_deltas(cell, hidden, ids, mixed, svd, reps, n_seeds):
     return out
 
 
-def ablation(meta, hidden, mixed, svd, n_seeds, null_reps=0):
-    # the whole outer split is redrawn per seed: with 38 mixed problems over 5 folds the
-    # fold assignment is itself a large source of variance, which one seed cannot show.
+def ablation(meta, hidden, mixed, svd, n_seeds, null_reps=0, positions=None):
+    # outer split redrawn per seed: fold assignment is a large variance source
     ids = np.array(sorted(meta.problem_id.unique()))
+    positions = positions or POSITIONS
     out = []
     print(f"{'pos':>5}{'pairs':>7}{'probs':>6}"
           f"{'TR':>16}{'TRH':>16}{'delta':>16}{'null delta':>16}{'z':>7}{'CI':>20}",
           flush=True)
-    for pos in POSITIONS:
+    for pos in positions:
         cell = meta[meta.pos == pos]
         if not len(cell):
             continue
@@ -272,7 +266,7 @@ def ablation(meta, hidden, mixed, svd, n_seeds, null_reps=0):
         if not per_seed["TR"]:
             print(f"{pos:>5}  skipped: no fold had both outcomes", flush=True)
             continue
-        # one score per trace, averaged over seeds, then bootstrapped over problems
+        # one score per trace, averaged over seeds, then bootstrapped
         pool = {
             a: pd.concat(kept[a])
             .groupby(["problem_id", "trace_id"], as_index=False)
@@ -285,7 +279,6 @@ def ablation(meta, hidden, mixed, svd, n_seeds, null_reps=0):
             continue
         d_pool, ci = paired_delta(pool["TR"], pool["TRH"])
         null = null_deltas(cell, hidden, ids, mixed, svd, null_reps, n_seeds)
-        sd = lambda v: float(np.std(v, ddof=1)) if len(v) > 1 else 0.0
         gap = np.array(per_seed["TRH"]) - np.array(per_seed["TR"])
         row = {
             "pos": pos,
@@ -308,10 +301,8 @@ def ablation(meta, hidden, mixed, svd, n_seeds, null_reps=0):
             "per_seed_TR": per_seed["TR"],
             "per_seed_TRH": per_seed["TRH"],
         }
-        # how far the observed gap sits from the gap permuted activations produce, in
-        # units of the null's own spread. a percentile band needs far more reps than this
-        # to be stable; the standardized distance is usable from ~10. it is a guide, not a
-        # formal test -- the null sd is itself estimated from `null_reps` draws.
+        # observed gap vs permuted gap, in null sd units. a guide, not a test:
+        # the null sd is itself estimated from null_reps draws.
         row["null_z"] = (
             (row["delta_mean"] - row["null_mean"]) / row["null_sd"]
             if len(null) >= 2 and row["null_sd"] > 1e-9 else np.nan
@@ -333,20 +324,21 @@ def ablation(meta, hidden, mixed, svd, n_seeds, null_reps=0):
 
 
 def nested(cell, feats_by_layer, outer, mixed, svd=0):
-    # inner folds pick the layer, outer folds score it. with ~38 mixed problems a single
-    # held-out split leaves too few to read, so every problem serves as test once.
+    # inner folds pick the layer, outer folds score it
     parts, picked = [], []
     for tr, te in outer:
         te_mixed = [p for p in te if p in mixed]
         if not te_mixed:
             continue
         best, best_cv = None, -1
+        # same inner splits for every (layer, C), so the comparison is like for like
+        inner_splits = [(i_tr, [p for p in i_te if p in mixed]) for i_tr, i_te in folds(tr, N_INNER)]
         # 1536 dims against ~2k rows, so C matters more than the layer does
         for layer, feats in zip(LAYERS, feats_by_layer):
             for C in CS:
                 inner = []
-                for i_tr, i_te in folds(tr, N_INNER):
-                    s = scores(cell, feats, i_tr, [p for p in i_te if p in mixed], C, svd)
+                for i_tr, i_te in inner_splits:
+                    s = scores(cell, feats, i_tr, i_te, C, svd)
                     if s is not None:
                         inner.append(auroc(pair_counts(s)))
                 cv = np.nanmean(inner) if inner and not np.all(np.isnan(inner)) else np.nan
@@ -378,6 +370,11 @@ def main():
                              "concatenating (0 to keep all 1536); fitted per training fold")
     parser.add_argument("--seeds", type=int, default=N_SEEDS,
                         help="number of outer-fold assignments to average over")
+    parser.add_argument("--positions", default="",
+                        help="comma-separated subset of the extracted positions to score, "
+                             "e.g. 128 or 128,512,1024; default all. the yield table always "
+                             "covers every position, since that is the context for reading "
+                             "any of them")
     parser.add_argument("--null-reps", type=int, default=NULL_REPS,
                         help="permutation reps calibrating how large a delta uninformative "
                              "hidden columns produce on their own; 0 to skip")
@@ -387,14 +384,12 @@ def main():
     meta_path, acts_path = f"data/meta{s}.parquet", f"data/acts{s}.npy"
     meta = pd.read_parquet(meta_path)
     acts = np.load(acts_path, mmap_mode="r")
-    # the labels here are joined to the activations by row index alone, so establish first
-    # that this meta and this acts were written by one extraction under one config
+    # labels join to activations by row index alone, so check provenance first
     dm = check_dataset_manifest(meta_path, acts_path, meta.trace_id.tolist(), acts.shape,
                                 strict=args.strict)
     if not (meta.row.values == np.arange(len(meta))).all():
         raise StaleCache("meta.row is not 0..n-1, so it cannot index acts.npy")
-    # LAYERS and POSITIONS are duplicated here to stay torch-free; check the copies agree
-    # with the ones the activations were actually extracted at
+    # constants duplicated to stay torch-free; check they match the extraction
     for name, mine in [("layers", LAYERS), ("positions", POSITIONS)]:
         theirs = dm["config"].get(name)
         if theirs != mine:
@@ -402,7 +397,6 @@ def main():
                              f"extracted with {theirs}")
     print(f"dataset config {short(dm['config_hash'])}, extracted {dm['written']}")
     meta["y"] = (~meta.is_correct.astype(bool)).astype(int)
-    feats_by_layer = [np.asarray(acts[:, i, :], dtype=np.float32) for i in range(len(LAYERS))]
 
     per_trace = meta.groupby("trace_id").agg(y=("y", "first"), pid=("problem_id", "first"))
     mixed = {p for p, g in per_trace.groupby("pid") if g.y.nunique() > 1}
@@ -413,28 +407,42 @@ def main():
     print("\nyield by position (later positions are length-selected subsamples)")
     print(yield_table(meta).to_string(index=False))
 
+    # POSITIONS stays whole; the manifest check above compares against it
+    positions = POSITIONS
+    if args.positions:
+        positions = [int(v) for v in args.positions.split(",") if v.strip()]
+        unknown = [v for v in positions if v not in POSITIONS]
+        if unknown:
+            raise SystemExit(f"--positions {unknown} not extracted; available: {POSITIONS}")
+
     if args.ablation:
         if args.layer not in LAYERS:
             raise SystemExit(f"--layer {args.layer} not extracted; available: {LAYERS}")
-        hidden = feats_by_layer[LAYERS.index(args.layer)]
-        print(f"\nablation: TR (prefix tf-idf + restart density) vs TRH (+ hidden states)")
+        # one layer only, so do not pull the other eight off the mmap
+        hidden = np.asarray(acts[:, LAYERS.index(args.layer), :], dtype=np.float32)
+        print("\nablation: TR (prefix tf-idf + restart density) vs TRH (+ hidden states)")
         print(f"layer {args.layer}, hidden SVD {args.svd_hidden or 'off'}, "
               f"{args.seeds} fold seeds, C chosen per arm by {N_INNER}-fold inner CV.")
-        print("n_gen is excluded: it is the final trace length, unknown to an online monitor.")
+        print("n_gen is excluded.")
         print(f"null delta: {args.null_reps} reps with activations permuted within problem, "
-              "i.e. what the gap\nlooks like when the hidden block carries nothing. judge "
-              "delta by z (distance from that\nnull in its own sd), not by the CI -- the CI "
-              "resamples problems and is blind to the\nfitting noise that 50 extra columns "
-              "introduce.")
+              "i.e. the gap uninformative hidden columns produce on their own. judge delta "
+              "by z (its distance from that null, in null sd units) rather than by CI.")
         if 0 < args.null_reps < 10:
             print(f"WARNING: {args.null_reps} null reps is too few to estimate the null sd; "
-                  "z will be unstable and can\nread large by accident. use at least 10.")
+                  "z will be unstable and can read large by accident. use at least 10.")
         print(flush=True)
-        rows = ablation(meta, hidden, mixed, args.svd_hidden, args.seeds, args.null_reps)
-        pd.DataFrame(rows).to_json(f"data/ablation{s}.json", orient="records", indent=2)
-        print(f"\nwrote data/ablation{s}.json")
+        rows = ablation(meta, hidden, mixed, args.svd_hidden, args.seeds, args.null_reps,
+                        positions)
+        name = (f"data/ablation{s}_L{args.layer}"
+                + (f"_svd{args.svd_hidden}" if args.svd_hidden != ABLATION_SVD else "")
+                + (f"_p{'-'.join(str(v) for v in positions)}"
+                   if positions != POSITIONS else "") + ".json")
+        pd.DataFrame(rows).to_json(name, orient="records", indent=2)
+        print(f"\nwrote {name}")
         return
 
+    # the layer sweep is the only path that needs every layer resident
+    feats_by_layer = [np.asarray(acts[:, i, :], dtype=np.float32) for i in range(len(LAYERS))]
     ids = np.array(sorted(meta.problem_id.unique()))
     np.random.default_rng(SEED).shuffle(ids)
     outer = folds(ids, N_OUTER)
@@ -444,7 +452,7 @@ def main():
     print(f"{'pos':>5}{'pairs':>7}{'(layer, C)':>34}{'auroc':>7}{'95% CI':>16}{'d':>7}"
           f"{'tfidf':>8}{'restart':>8}{'shuf':>7}")
     out = []
-    for pos in POSITIONS:
+    for pos in positions:
         cell = meta[meta.pos == pos]
         if not len(cell):
             continue
@@ -457,8 +465,7 @@ def main():
             print(f"{pos:>5}  skipped: {int(counts[:, 1].sum())} pairs, too few to read")
             continue
 
-        # baselines run through the same outer folds; n_gen is an oracle a live monitor
-        # never has, restarts and prefix text are what it does have
+        # baselines run through the same outer folds
         tf = pd.concat([r for r in (tfidf(cell, tr, [p for p in te if p in mixed])
                                     for tr, te in outer) if r is not None])
         te_all = cell[cell.problem_id.isin(mixed)]

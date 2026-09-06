@@ -6,9 +6,11 @@ Activation parts are keyed by line number in `traces.jsonl`, so a part file exis
 not evidence it holds the right activations. Every parts directory therefore carries a
 `manifest.json`, and a part is reused only when the manifest proves it matches:
 
-- **config hash** — model, rendered prompts (chat template + `INSTRUCTION`/`STRUCTURED`),
-  `LAYERS`, `POSITIONS`, `MIN_STEP_TOKENS`, compute dtype, tokenizer, and
-  `EXTRACTOR_VERSION`. A change to any of these refuses the whole directory.
+- **config hash** — extraction mode, model, rendered prompts (chat template +
+  `INSTRUCTION`/`STRUCTURED`), `LAYERS`, compute dtype, tokenizer, `EXTRACTOR_VERSION`,
+  and whichever of `POSITIONS` (fixed mode) or `MIN_STEP_TOKENS` (steps mode) that run
+  actually reads — the other is inert, so it is hashed as null. A change to any of these
+  refuses the whole directory.
 - **per part** — `trace_id`, a hash of the trace's problem + text + `structured` flag, the
   trace's token count, the exact token indices extracted at, the array shape, and the
   file's sha256.
@@ -34,7 +36,11 @@ python src/extract.py --fixed --tag B --rebuild
 # probe, optionally re-hashing acts.npy against its manifest
 python src/probe_fixed.py --tag B --strict
 
-python tests/test_cache.py
+# tests are plain scripts, no pytest; each exits non-zero on failure
+python tests/test_cache.py       # manifest and stale-reuse paths
+python tests/test_ablation.py    # yield table and TR vs TRH on planted signal
+python tests/test_positions.py   # --positions scoping and per-run output files
+python tests/test_recover.py     # recover.py logic, with torch/vLLM stubbed
 ```
 
 `--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a

@@ -29,18 +29,12 @@ LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # decoder block index; -1 is the emb
 POSITIONS = [128, 256, 512, 1024, 2048, 4096]
 MIN_STEP_TOKENS = 5
 CHUNK = 1024
-# bump whenever the extraction convention changes in a way the constants above do not
-# capture (which token a position maps to, how steps are segmented, what gets stored).
-# every cached part carries this, so a bump invalidates every cache instead of half of one.
+# bump when the extraction convention changes; invalidates every cached part
 EXTRACTOR_VERSION = 2
-# a cached part and a fresh forward pass differ slightly in fp16 (chunking changes the
-# accumulation order), but a part belonging to a DIFFERENT trace differs enormously.
-# cosine separates the two cleanly where exact equality would not.
+# fp16 and CHUNK shift the last bits; a wrong trace shifts direction
 VERIFY_MIN_COS = 0.99
 VERIFY_N = 8
-# the manifest is rewritten whole, and data/ is usually a Drive FUSE mount where that is
-# far slower than the .npy write. batching costs at most this many re-extracted traces
-# after a disconnect, since an unrecorded part is treated as absent.
+# whole-manifest rewrite is slow on Drive FUSE; caps re-extraction after a crash
 MANIFEST_EVERY = 10
 
 
@@ -50,8 +44,7 @@ def paths(tag):
 
 
 def config_fingerprint(tokenizer, device, mode):
-    # everything that changes the numbers in a part. the two rendered prompts pull in the
-    # chat template, INSTRUCTION and STRUCTURED, so any prompt edit changes the hash.
+    # rendered prompts cover chat template, INSTRUCTION and STRUCTURED
     canary = "What is 1+1?"
     cfg = {
         "extractor_version": EXTRACTOR_VERSION,
@@ -71,8 +64,7 @@ def config_fingerprint(tokenizer, device, mode):
 
 
 def trace_sha(trace):
-    # identity of the trace itself, not just its id: regenerating traces.jsonl keeps
-    # trace_id stable while the text underneath changes, which is the silent case
+    # trace_id survives regeneration; the text under it does not
     return sha_obj(
         {
             "problem": trace["problem"],
@@ -91,12 +83,26 @@ def expect_part(trace, trace_ids, token_idx):
     }
 
 
-def record_part(manifest, n, path, trace, trace_ids, token_idx):
-    entry = expect_part(trace, trace_ids, token_idx)
+def fixed_positions(trace_ids):
+    # pos is tokens observed (1-indexed count): need at least pos tokens to exist, so the
+    # cutoff is <=, not <. The hidden state for a pos-token prefix lives at index pos - 1.
+    # attention is causal, so state at position p ignores everything after it: feeding the
+    # tail of a 32k trace only to read position 4096 is wasted compute.
+    positions = [p for p in POSITIONS if p <= len(trace_ids)]
+    return positions, [p - 1 for p in positions], trace_ids[: max(POSITIONS) + 1]
+
+
+def stamp_part(manifest, n, path, entry):
+    # the written file's own shape and bytes, so the entry describes what is on disk
+    entry = dict(entry)
     entry["shape"] = list(np.load(path, mmap_mode="r").shape)
     entry["sha256"] = sha_file(path)
     manifest["parts"][str(n)] = entry
     return entry
+
+
+def record_part(manifest, n, path, trace, trace_ids, token_idx):
+    return stamp_part(manifest, n, path, expect_part(trace, trace_ids, token_idx))
 
 
 def shared_prefix(seqs):
@@ -221,8 +227,7 @@ def check(tokenizer, model, device, trace):
 
 
 def warn_orphans(parts_dir, n_traces):
-    # parts left over from a longer traces.jsonl: never read, but a sign the file was
-    # regenerated, which is exactly when line-number keying goes wrong
+    # leftover parts from a longer traces.jsonl
     if not os.path.isdir(parts_dir):
         return
     orphans = [
@@ -235,8 +240,7 @@ def warn_orphans(parts_dir, n_traces):
 
 
 def cosines(a, b):
-    # per (row, layer) cosine between a cached part and a fresh one. fp16 and a different
-    # CHUNK move the last bits; holding a different trace moves the direction.
+    # per (row, layer) cosine, cached vs fresh
     a = a.astype(np.float32).reshape(-1, a.shape[-1])
     b = b.astype(np.float32).reshape(-1, b.shape[-1])
     den = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
@@ -244,9 +248,7 @@ def cosines(a, b):
 
 
 def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, seed=0):
-    # how a parts directory written before manifests existed gets checked: re-extract a
-    # random sample and compare. a part holding some other trace's activations, or one
-    # written under a different model or prompt, does not survive this.
+    # check a pre-manifest parts dir: re-extract a sample and compare
     cfg, cfg_hash = config_fingerprint(tokenizer, device, mode)
     print(f"verifying {parts_dir} against config {short(cfg_hash)} (mode {mode})\n", flush=True)
 
@@ -254,8 +256,7 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
     for n, trace in enumerate(traces):
         prompt_ids, trace_ids, offsets = encode(tokenizer, trace)
         if mode == "fixed":
-            token_idx = [p - 1 for p in POSITIONS if p <= len(trace_ids)]
-            feed = trace_ids[: max(POSITIONS) + 1]
+            _, token_idx, feed = fixed_positions(trace_ids)
         else:
             _, token_idx = segment(trace["text"], offsets)
             feed = trace_ids
@@ -308,7 +309,7 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
         print("re-run with --adopt to stamp a manifest so these parts can be reused")
         return
 
-    # never overwrite a manifest describing a different config without leaving a copy
+    # back up a manifest describing a different config
     prior = manifest_path(parts_dir)
     if os.path.exists(prior):
         old = json.load(open(prior))
@@ -322,8 +323,7 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
         "config_hash": cfg_hash,
         "config": cfg,
         "parts": {},
-        # honest about provenance: only `verified_parts` were compared against a fresh pass,
-        # the rest are structurally checked only
+        # only verified_parts were compared; the rest are shape-checked
         "adopted": {
             "when": time.strftime("%Y-%m-%d %H:%M:%S"),
             "verified_parts": sample,
@@ -334,11 +334,7 @@ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, s
         },
     }
     for n in usable:
-        part = f"{parts_dir}/{n}.npy"
-        entry = dict(want[n])
-        entry["shape"] = list(np.load(part, mmap_mode="r").shape)
-        entry["sha256"] = sha_file(part)
-        manifest["parts"][str(n)] = entry
+        stamp_part(manifest, n, f"{parts_dir}/{n}.npy", want[n])
     save_manifest(parts_dir, manifest)
     print(f"stamped {len(usable)} parts into {manifest_path(parts_dir)}", flush=True)
 
@@ -348,31 +344,24 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     manifest = load_manifest(parts_dir, cfg, cfg_hash, rebuild)
     print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest",
           flush=True)
-    save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves a readable cache
+    save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves it readable
 
     ids, want, pos_by_n, reused, written = {}, {}, {}, 0, 0
     for n, trace in enumerate(traces):
         prompt_ids, trace_ids, _ = encode(tokenizer, trace)
         ids[n] = trace_ids
-        # pos is tokens observed (1-indexed count): need at least pos tokens to exist,
-        # so the cutoff is <=, not <. The hidden state for a pos-token prefix lives at
-        # 0-indexed token pos - 1.
-        positions = [p for p in POSITIONS if p <= len(trace_ids)]
-        token_idx = [p - 1 for p in positions]
+        positions, token_idx, feed = fixed_positions(trace_ids)
         pos_by_n[n] = positions
         want[n] = expect_part(trace, trace_ids, token_idx)
         part = f"{parts_dir}/{n}.npy"
-        # a part is reused only when the manifest proves it was written for this trace,
-        # at these token indices, under this config -- not merely because the file is there
+        # reuse needs manifest proof: this trace, these indices, this config
         why = part_ok(manifest["parts"].get(str(n)), part, want[n])
         if why is None:
             reused += 1
             continue
         if os.path.exists(part):
             print(f"re-extracting {n} ({trace['trace_id']}): {why}", flush=True)
-        # attention is causal, so state at position p ignores everything after it: feeding
-        # the tail of a 32k trace only to read position 4096 is wasted compute
-        np.save(part, activations(model, device, prompt_ids, trace_ids[: max(POSITIONS) + 1], token_idx))
+        np.save(part, activations(model, device, prompt_ids, feed, token_idx))
         record_part(manifest, n, part, trace, trace_ids, token_idx)
         written += 1
         if written % MANIFEST_EVERY == 0:
@@ -386,8 +375,7 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     rows, acts = [], []
     for n, trace in enumerate(traces):
         part = f"{parts_dir}/{n}.npy"
-        # re-checked here, not just at write time: assembly is what pairs a part with a
-        # label row, and it also runs on its own when every part is already cached
+        # re-checked: assembly is what pairs a part with a label row
         why = part_ok(manifest["parts"].get(str(n)), part, want[n])
         if why is not None:
             raise StaleCache(f"part {n} ({trace['trace_id']}) failed validation at assembly: {why}")
@@ -399,7 +387,7 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
             f"trace {n}: {len(h)} activations but {len(positions)} positions "
             f"({len(ids[n])} trace tokens) -- activation/text prefixes are out of sync"
         )
-        for j, pos in enumerate(positions):
+        for pos in positions:
             prefix = tokenizer.decode(ids[n][:pos])
             rows.append(
                 {
@@ -435,7 +423,7 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
     manifest = load_manifest(parts_dir, cfg, cfg_hash, rebuild)
     print(f"config {short(cfg_hash)}, {len(manifest['parts'])} parts already in the manifest",
           flush=True)
-    save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves a readable cache
+    save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves it readable
 
     # one file per trace so a crash or a colab disconnect costs one trace, not the run
     want, reused, written = {}, 0, 0
@@ -444,7 +432,7 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
         spans, token_idx = segment(trace["text"], offsets)
         want[n] = expect_part(trace, trace_ids, token_idx)
         part = f"{parts_dir}/{n}.npy"
-        # token_idx is in the fingerprint, so a change to segmentation invalidates the part
+        # token_idx in the fingerprint, so resegmentation invalidates the part
         why = part_ok(manifest["parts"].get(str(n)), part, want[n])
         if why is None:
             reused += 1
@@ -509,25 +497,24 @@ def main():
     traces = [json.loads(line) for line in open(traces_path)]
     n_trunc = sum(t["trunc"] for t in traces)
     print(f"truncated {n_trunc}/{len(traces)} ({n_trunc / len(traces):.1%}), counted as incorrect", flush=True)
-    kept = traces
-    for t in kept:
+    for t in traces:
         if t["trunc"]:
             t["is_correct"] = False
 
     tokenizer, model, device = load_model()
     if args.check:
-        check(tokenizer, model, device, kept[0])
+        check(tokenizer, model, device, traces[0])
         return
     try:
         if args.verify:
-            verify(tokenizer, model, device, kept, parts_dir,
+            verify(tokenizer, model, device, traces, parts_dir,
                    "fixed" if args.fixed else "steps", args.verify_n, args.adopt)
         elif args.fixed:
-            fixed(tokenizer, model, device, kept, acts_path, meta_path, parts_dir, args.rebuild)
+            fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, args.rebuild)
         else:
-            steps(tokenizer, model, device, kept, acts_path, meta_path, parts_dir, args.rebuild)
+            steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, args.rebuild)
     except StaleCache as e:
-        raise SystemExit(f"\nstale cache: {e}")
+        raise SystemExit(f"\nstale cache: {e}") from e
 
 
 if __name__ == "__main__":

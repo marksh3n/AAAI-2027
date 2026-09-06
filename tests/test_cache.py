@@ -1,5 +1,4 @@
-# exercises every stale-reuse path the mentor named, using fake part files.
-# stdlib only, so it runs without torch/numpy.
+# stale-reuse paths, using fake part files. stdlib only.
 import os, shutil, sys, tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
@@ -49,10 +48,10 @@ def fresh_dir():
     return d
 
 
-print("\n1. fresh directory, extract, then reuse")
+print("\n1. fresh dir, extract, reuse")
 d = fresh_dir()
 m = load_manifest(d, CFG_A, HASH_A)
-check("empty manifest on a new dir", m["parts"] == {} and m["config_hash"] == HASH_A)
+check("empty manifest on new dir", m["parts"] == {} and m["config_hash"] == HASH_A)
 e0 = expect("12_0", "hello", 900, [127, 255])
 write_part(d, 0)
 m["parts"]["0"] = entry_for(d, 0, e0)
@@ -69,27 +68,27 @@ except StaleCache as ex:
     check("raises on config change", "model" in str(ex), str(ex))
     check("names the changed field", "deepseek-7B" in str(ex))
 
-print("\n3. traces.jsonl reordered: line 0 now holds a different trace")
+print("\n3. traces.jsonl reordered, line 0 is a different trace")
 other = expect("47_1", "a different trace entirely", 900, [127, 255])
 why = part_ok(m2["parts"].get("0"), f"{d}/0.npy", other)
 check("refuses a part keyed to another trace", why is not None and "trace_id" in why, why)
 
-print("\n4. traces regenerated: same trace_id, resampled text")
+print("\n4. same trace_id, resampled text")
 same_id = expect("12_0", "resampled at temperature 0.6", 900, [127, 255])
 why = part_ok(m2["parts"].get("0"), f"{d}/0.npy", same_id)
 check("refuses same id with different text", why is not None and "trace_sha" in why, why)
 
-print("\n5. same trace_id and same shape, but a different token count")
+print("\n5. same trace_id and shape, different token count")
 shorter = expect("12_0", "hello", 200, [127])
 why = part_ok(m2["parts"].get("0"), f"{d}/0.npy", shorter)
 check("refuses a changed token count", why is not None, why)
 
-print("\n6. positions changed: same trace, different extraction offsets")
+print("\n6. positions changed")
 moved = expect("12_0", "hello", 900, [127, 511])
 why = part_ok(m2["parts"].get("0"), f"{d}/0.npy", moved)
 check("refuses changed token_idx", why is not None and "token_idx" in why, why)
 
-print("\n7. the .npy itself was overwritten out of band")
+print("\n7. .npy overwritten out of band")
 write_part(d, 0, b"different bytes entirely")
 why = part_ok(m2["parts"].get("0"), f"{d}/0.npy", e0)
 check("catches a rewritten file", why is not None and "contents" in why, why)
@@ -103,7 +102,7 @@ check("catches a deleted part", part_ok(m2["parts"].get("0"), f"{d}/0.npy", e0) 
 print("\n9. a part with no manifest entry")
 check("catches an unrecorded part", part_ok(None, f"{d}/0.npy", e0) == "not in the manifest")
 
-print("\n10. legacy dir: parts on disk, no manifest (run B)")
+print("\n10. parts on disk, no manifest")
 d2 = fresh_dir()
 os.makedirs(d2)
 for n in range(3):
@@ -114,7 +113,7 @@ try:
 except StaleCache as ex:
     check("refuses an unmanifested cache", "--verify" in str(ex) and "--rebuild" in str(ex), str(ex))
 
-print("\n11. --rebuild sets the old parts aside instead of deleting them")
+print("\n11. --rebuild sets aside, does not delete")
 m3 = load_manifest(d2, CFG_A, HASH_A, rebuild=True)
 check("returns an empty manifest", m3["parts"] == {})
 check("old dir is empty of parts", not os.path.exists(f"{d2}/0.npy"))
@@ -154,7 +153,7 @@ except StaleCache as ex:
 check("non-strict skips the acts hash",
       check_dataset_manifest(meta_p, acts_p, tids, (4, 2, 1536)) is not None)
 
-print("\n13. a missing dataset manifest is refused, not assumed fine")
+print("\n13. missing dataset manifest is refused")
 os.remove(dataset_manifest_path(meta_p))
 try:
     check_dataset_manifest(meta_p, acts_p, tids, (4, 2, 1536))

@@ -1,9 +1,10 @@
-# self-validating cache for activation parts and for the assembled acts/meta pair.
+# manifest-validated cache for activation parts and the acts/meta pair.
+# stdlib only, probe scripts import this.
 import glob, hashlib, json, os, shutil, time
 
 
 class StaleCache(RuntimeError):
-    """Raised when a cache cannot be proven to match the current run."""
+    """Cache cannot be proven to match the current run."""
 
 
 def sha_obj(obj):
@@ -35,7 +36,7 @@ def _diff_lines(old, new):
 
 
 def set_aside(path):
-    # never delete a cache the user may still want; move it and say where it went
+    # move aside, never delete
     dest = f"{path}.stale-{time.strftime('%Y%m%d-%H%M%S')}"
     shutil.move(path, dest)
     print(f"moved the previous cache to {dest}")
@@ -50,7 +51,7 @@ def manifest_path(parts_dir):
 
 
 def load_manifest(parts_dir, cfg, cfg_hash, rebuild=False):
-    """Return a manifest whose parts are safe to reuse, or raise StaleCache."""
+    """Manifest whose parts are safe to reuse, else StaleCache."""
     path = manifest_path(parts_dir)
     fresh = {"config_hash": cfg_hash, "config": cfg, "parts": {}}
     stray = glob.glob(f"{parts_dir}/*.npy")
@@ -64,12 +65,9 @@ def load_manifest(parts_dir, cfg, cfg_hash, rebuild=False):
             os.makedirs(parts_dir, exist_ok=True)
             return fresh
         raise StaleCache(
-            f"{len(stray)} cached parts in {parts_dir} but no manifest.json.\n"
-            "Nothing on disk records which traces, model, prompt, layers or positions "
-            "produced them, so they cannot be reused safely.\n"
-            "  --verify --adopt   re-extract a random sample, compare against the cache, "
-            "and stamp a manifest if it matches\n"
-            "  --rebuild          move these parts aside and extract again from scratch"
+            f"{len(stray)} parts in {parts_dir}, no manifest.json. Provenance unknown.\n"
+            "  --verify --adopt   check a sample against a fresh pass, then stamp\n"
+            "  --rebuild          set aside and re-extract"
         )
 
     m = json.load(open(path))
@@ -79,11 +77,10 @@ def load_manifest(parts_dir, cfg, cfg_hash, rebuild=False):
             os.makedirs(parts_dir, exist_ok=True)
             return fresh
         raise StaleCache(
-            f"{parts_dir} was written under a different config "
-            f"({short(m.get('config_hash', 'unknown'))} != {short(cfg_hash)}):\n"
+            f"{parts_dir} config {short(m.get('config_hash', 'unknown'))} "
+            f"!= current {short(cfg_hash)}:\n"
             f"{_diff_lines(m.get('config', {}), cfg)}\n"
-            "Reusing it would pair these activations with the current labels. "
-            "Re-run with --rebuild to set the old parts aside and extract again."
+            "Use --rebuild to set aside and re-extract."
         )
     m["config"] = cfg  # same hash
     m.setdefault("parts", {})
@@ -99,7 +96,7 @@ def save_manifest(parts_dir, manifest):
 
 
 def part_ok(entry, path, expect, check_bytes=True):
-    """None when the cached part provably matches `expect`, else the reason it does not."""
+    """None if the part matches expect, else the reason."""
     if entry is None:
         return "not in the manifest"
     if not os.path.exists(path):
@@ -120,7 +117,7 @@ def dataset_manifest_path(meta_path):
 
 
 def write_dataset_manifest(meta_path, acts_path, cfg, cfg_hash, trace_ids, acts_shape, strict=True):
-    """Bind meta.parquet to the acts.npy it was built with, and both to the config."""
+    """Bind meta.parquet to acts.npy and both to the config."""
     m = {
         "config_hash": cfg_hash,
         "config": cfg,
@@ -139,14 +136,13 @@ def write_dataset_manifest(meta_path, acts_path, cfg, cfg_hash, trace_ids, acts_
 
 
 def check_dataset_manifest(meta_path, acts_path, trace_ids, acts_shape, strict=False):
-    """Refuse a meta/acts pair that was not written together by the same extraction."""
+    """Refuse a meta/acts pair from different extractions."""
     path = dataset_manifest_path(meta_path)
     if not os.path.exists(path):
         raise StaleCache(
-            f"{path} is missing, so {os.path.basename(meta_path)} and "
-            f"{os.path.basename(acts_path)} cannot be shown to come from the same run.\n"
-            "Re-run extract.py --fixed to rebuild them together (it will reuse any parts "
-            "its manifest can validate, so this is cheap)."
+            f"{path} missing: cannot tie {os.path.basename(meta_path)} to "
+            f"{os.path.basename(acts_path)}.\n"
+            "Re-run extract.py --fixed; validated parts are reused."
         )
     m = json.load(open(path))
     problems = []
@@ -160,8 +156,8 @@ def check_dataset_manifest(meta_path, acts_path, trace_ids, acts_shape, strict=F
         problems.append("acts.npy contents changed since the manifest was written")
     if problems:
         raise StaleCache(
-            "the activation matrix and the label table do not belong to the same run:\n  "
+            "acts and meta are from different runs:\n  "
             + "\n  ".join(problems)
-            + "\nRe-run extract.py --fixed to rebuild them together."
+            + "\nRe-run extract.py --fixed."
         )
     return m
