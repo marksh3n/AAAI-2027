@@ -104,17 +104,31 @@ check("wrong answer scored wrong", s["correct"] is False and not s["truncated"])
 print("\n5. resumability")
 
 
+class FakeEngine:
+    # finishes one request per step, newest first, so completion order != submit order
+    def __init__(self):
+        self.pending, self.max_seen = [], 0
+
+    def add_request(self, rid, prompt, sp):
+        self.pending.append((rid, prompt, sp))
+        self.max_seen = max(self.max_seen, len(self.pending))
+
+    def step(self):
+        if not self.pending:
+            return []
+        rid, prompt, sp = self.pending.pop()
+        outs = [types.SimpleNamespace(text=f"s{sp.seed}-{j} \\boxed{{12}}", token_ids=[1, 2],
+                                      finish_reason="stop") for j in range(sp.n)]
+        return [types.SimpleNamespace(request_id=rid, finished=True, outputs=outs,
+                                      prompt_token_ids=prompt["prompt_token_ids"])]
+
+
 class FakeLLM:
+    def __init__(self):
+        self.llm_engine = FakeEngine()
+
     def get_tokenizer(self):
         return types.SimpleNamespace(decode=lambda ids: "".join(map(str, ids)))
-
-    def generate(self, prompts, params):
-        out = []
-        for p, sp in zip(prompts, params):
-            outs = [types.SimpleNamespace(text=f"s{sp.seed}-{j} \\boxed{{12}}", token_ids=[1, 2],
-                                          finish_reason="stop") for j in range(sp.n)]
-            out.append(types.SimpleNamespace(outputs=outs, prompt_token_ids=p["prompt_token_ids"]))
-        return out
 
 
 def prefix(i):
@@ -124,7 +138,7 @@ def prefix(i):
 
 
 params = lambda **kw: types.SimpleNamespace(**kw)
-args = types.SimpleNamespace(chunk=2, temp=0.7, top_p=0.95, max_tokens_cap=0, seed=0, round=0)
+args = types.SimpleNamespace(inflight=2, temp=0.7, top_p=0.95, max_tokens_cap=0, seed=0, round=0)
 prefixes = [prefix(i) for i in range(3)]
 with tempfile.TemporaryDirectory() as d:
     out = f"{d}/rollouts.jsonl"
@@ -139,6 +153,15 @@ with tempfile.TemporaryDirectory() as d:
     rows = read_jsonl(out)
     keys = [(r["prefix_id"], r["round"]) for r in rows]
     check("no duplicate (prefix, round)", len(keys) == len(set(keys)) == 3, keys)
+    check("each row carries its own prefix's samples",
+          all(c["text"].startswith(f"s{r['seed']}-") for r in rows for c in r["continuations"]))
+
+    llm = FakeLLM()
+    with tempfile.TemporaryDirectory() as d2:
+        rr.run(llm, params, rr.todo(prefixes, {}, 0, 2), args, f"{d2}/r.jsonl", "h")
+        check("never more than --inflight prefixes on the engine", llm.llm_engine.max_seen <= 2,
+              llm.llm_engine.max_seen)
+        check("all prefixes written", len(read_jsonl(f"{d2}/r.jsonl")) == 3)
     check("third rerun has nothing to do", rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2) == [])
 
     top = types.SimpleNamespace(**{**vars(args), "round": 1})

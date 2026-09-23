@@ -7,6 +7,7 @@ from cache import StaleCache, changed_keys, sha_obj, short
 
 VLLM_VERSION = "0.10.2"
 LOG_EVERY = 50
+LOG_SECONDS = 600  # slow GPUs: also log every 10 min
 SMOKE = {"limit": 2, "n": 2, "max_tokens_cap": 256}
 
 
@@ -22,7 +23,8 @@ def add_args(parser):
                         help="jsonl of {prefix_id, n}: only these run, n extra samples each")
     parser.add_argument("--round", type=int, default=0)
     parser.add_argument("--max-tokens-cap", type=int, default=0, help="smoke only; 0 = none")
-    parser.add_argument("--chunk", type=int, default=32, help="prefixes per llm.generate call")
+    parser.add_argument("--inflight", type=int, default=16,
+                        help="prefixes on the engine at once (x n sequences)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--smoke", action="store_true",
                         help=f"{SMOKE}, separate output, asserts samples differ")
@@ -117,26 +119,34 @@ def check_prompts(llm, make_params, recs):
 
 
 def run(llm, make_params, work, args, out, cfg_hash):
-    tokenizer = llm.get_tokenizer()
-    start, tokens, done_n, last_log = time.time(), 0, 0, 0
-    total = len(work)
+    # rolling window of --inflight prefixes on the engine; each prefix is written the
+    # moment all n of its samples finish, so a straggler never holds up the others and
+    # a disconnect loses only unfinished prefixes
+    engine, tokenizer = llm.llm_engine, llm.get_tokenizer()
+    queue, inflight = list(work), {}
+    start, tokens, seqs, done_n = time.time(), 0, 0, 0
+    last_n, last_t, total = 0, start, len(work)
     with open(out, "a") as f:
-        for i in range(0, total, args.chunk):
-            batch = work[i : i + args.chunk]
-            prompts, params = [], []
-            for rec, n in batch:
-                prompts.append({"prompt_token_ids": rec["prompt_token_ids"] + rec["prefix_gen_token_ids"]})
+        while queue or inflight:
+            while queue and len(inflight) < args.inflight:
+                rec, n = queue.pop(0)
                 cap = rec["max_tokens"]
                 if args.max_tokens_cap:
                     cap = min(cap, args.max_tokens_cap)
-                params.append(make_params(n=n, temperature=args.temp, top_p=args.top_p,
-                                          max_tokens=cap,
-                                          seed=prefix_seed(args.seed, rec["prefix_id"], args.round)))
-            for (rec, n), p, out_ in zip(batch, params, llm.generate(prompts, params)):
+                p = make_params(n=n, temperature=args.temp, top_p=args.top_p, max_tokens=cap,
+                                seed=prefix_seed(args.seed, rec["prefix_id"], args.round))
+                engine.add_request(rec["prefix_id"], {"prompt_token_ids": rec["prompt_token_ids"]
+                                                      + rec["prefix_gen_token_ids"]}, p)
+                inflight[rec["prefix_id"]] = (rec, n, p)
+            for out_ in engine.step():
+                if not out_.finished:
+                    continue
+                rec, n, p = inflight.pop(out_.request_id)
                 prefix_text = tokenizer.decode(rec["prefix_gen_token_ids"])
                 conts = [score(prefix_text, rec["gold_answer"], o.text, len(o.token_ids),
                                o.finish_reason) for o in out_.outputs]
                 tokens += sum(c["n_gen"] for c in conts)
+                seqs += len(conts)
                 f.write(json.dumps({
                     "prefix_id": rec["prefix_id"],
                     "round": args.round,
@@ -152,15 +162,14 @@ def run(llm, make_params, work, args, out, cfg_hash):
                     "cut_token_idx": rec["cut_token_idx"],
                     "continuations": conts,
                 }) + "\n")
-            f.flush()
-            done_n += len(batch)
-            if done_n - last_log >= LOG_EVERY or done_n == total:
-                last_log = done_n
-                el = time.time() - start
-                rate = tokens / el if el else 0.0
-                per_prefix = tokens / done_n
-                eta = (total - done_n) * per_prefix / rate / 3600 if rate else float("nan")
-                seqs = sum(n for _, n in work[:done_n])
+                f.flush()
+                done_n += 1
+            now = time.time()
+            if done_n > last_n and (done_n - last_n >= LOG_EVERY or now - last_t >= LOG_SECONDS
+                                    or done_n == total):
+                last_n, last_t = done_n, now
+                rate = tokens / (now - start)
+                eta = (total - done_n) * (tokens / done_n) / rate / 3600 if rate else float("nan")
                 print(f"{done_n}/{total} prefixes | {rate:,.0f} gen tok/s | "
                       f"mean continuation {tokens / seqs:,.0f} tok | "
                       f"~{eta:.2f} h left for {total - done_n} prefixes", flush=True)
@@ -181,6 +190,13 @@ def main():
     if vllm.__version__ != VLLM_VERSION and not args.allow_version_mismatch:
         raise SystemExit(f"tag-B used vllm {VLLM_VERSION}; pass --allow-version-mismatch to go on")
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import RequestOutputKind
+
+    def make_params(**kw):
+        # one output per prefix, once all n samples are done (what llm.generate sets)
+        sp = SamplingParams(**kw)
+        sp.output_kind = RequestOutputKind.FINAL_ONLY
+        return sp
 
     prefixes = read_jsonl(args.prefix_file)
     overrides = None
@@ -204,7 +220,7 @@ def main():
     llm = LLM(model=MODEL, dtype="float16", enable_prefix_caching=True,
               max_model_len=max_len, gpu_memory_utilization=args.gpu_mem)
     check_prompts(llm, SamplingParams, [r for r, _ in work])
-    run(llm, SamplingParams, work, args, args.out, cfg_hash)
+    run(llm, make_params, work, args, args.out, cfg_hash)
 
     if args.smoke:
         ids = {r["prefix_id"] for r, _ in work}
