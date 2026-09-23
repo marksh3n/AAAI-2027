@@ -131,6 +131,8 @@ with tempfile.TemporaryDirectory() as d:
     rr.run(FakeLLM(), params, rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2, limit=2), args,
            out, "h")
     check("partial run writes 2 records", len(read_jsonl(out)) == 2)
+    check("rerun with the same limit is a no-op",
+          rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2, limit=2) == [])
     work = rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2)
     check("rerun only has the missing prefix", [r["prefix_id"] for r, _ in work] == [prefixes[2]["prefix_id"]])
     rr.run(FakeLLM(), params, work, args, out, "h")

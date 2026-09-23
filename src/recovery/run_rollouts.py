@@ -50,7 +50,10 @@ def check_config(path, cfg):
 
 
 def todo(prefixes, done, round_, n, overrides=None, limit=0):
-    # (record, n) still to sample in this round, prefix-file order
+    # (record, n) still to sample in this round, prefix-file order. limit picks the
+    # first N prefixes before skipping done ones, so a limited rerun is a no-op.
+    if limit:
+        prefixes = [r for r in prefixes if overrides is None or r["prefix_id"] in overrides][:limit]
     out = []
     for rec in prefixes:
         pid = rec["prefix_id"]
@@ -63,7 +66,7 @@ def todo(prefixes, done, round_, n, overrides=None, limit=0):
         if (pid, round_) in done:
             continue
         out.append((rec, n_here))
-    return out[:limit] if limit else out
+    return out
 
 
 def done_rows(path, prefixes):
