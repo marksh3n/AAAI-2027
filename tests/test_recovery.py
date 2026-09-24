@@ -105,22 +105,29 @@ print("\n5. resumability")
 
 
 class FakeEngine:
-    # finishes one request per step, newest first, so completion order != submit order
+    # streams each request as two deltas; finishes newest first, so completion order
+    # != submit order and several requests are mid-stream at once
     def __init__(self):
-        self.pending, self.max_seen = [], 0
+        self.live, self.max_seen, self.added = [], 0, []
 
     def add_request(self, rid, prompt, sp):
-        self.pending.append((rid, prompt, sp))
-        self.max_seen = max(self.max_seen, len(self.pending))
+        self.live.append([rid, sp, 0])
+        self.added.append((rid, sp))
+        self.max_seen = max(self.max_seen, len(self.live))
 
     def step(self):
-        if not self.pending:
-            return []
-        rid, prompt, sp = self.pending.pop()
-        outs = [types.SimpleNamespace(text=f"s{sp.seed}-{j} \\boxed{{12}}", token_ids=[1, 2],
-                                      finish_reason="stop") for j in range(sp.n)]
-        return [types.SimpleNamespace(request_id=rid, finished=True, outputs=outs,
-                                      prompt_token_ids=prompt["prompt_token_ids"])]
+        outs = []
+        for item in list(self.live):
+            rid, sp, k = item
+            if k == 0:  # first delta for everyone running
+                item[2] = 1
+                outs.append(types.SimpleNamespace(request_id=rid, finished=False, outputs=[
+                    types.SimpleNamespace(text=f"s{sp.seed} ", token_ids=[1], finish_reason=None)]))
+        if not outs and self.live:  # then finish the newest one
+            rid, sp, _ = self.live.pop()
+            outs.append(types.SimpleNamespace(request_id=rid, finished=True, outputs=[
+                types.SimpleNamespace(text="\\boxed{12}", token_ids=[2, 3], finish_reason="stop")]))
+        return outs
 
 
 class FakeLLM:
@@ -138,44 +145,67 @@ def prefix(i):
 
 
 params = lambda **kw: types.SimpleNamespace(**kw)
-args = types.SimpleNamespace(inflight=2, temp=0.7, top_p=0.95, max_tokens_cap=0, seed=0, round=0)
+args = types.SimpleNamespace(inflight=3, temp=0.7, top_p=0.95, max_tokens_cap=0, seed=0, round=0)
 prefixes = [prefix(i) for i in range(3)]
 with tempfile.TemporaryDirectory() as d:
     out = f"{d}/rollouts.jsonl"
     rr.run(FakeLLM(), params, rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2, limit=2), args,
            out, "h")
-    check("partial run writes 2 records", len(read_jsonl(out)) == 2)
+    rows = read_jsonl(out)
+    check("one row per continuation: 2 prefixes x 2", len(rows) == 4, len(rows))
+    check("deltas stitched into the full text",
+          all(r["text"] == f"s{r['seed']} \\boxed{{12}}" for r in rows), rows[0]["text"])
+    check("token count sums the deltas", all(r["n_gen"] == 3 for r in rows))
+    check("scored from the stitched text", all(r["correct"] for r in rows))
+    check("sample seeds follow vLLM's seed + index",
+          sorted(r["seed"] for r in rows if r["prefix_id"] == prefixes[0]["prefix_id"])
+          == [prefix_seed(0, prefixes[0]["prefix_id"], 0) + i for i in range(2)])
     check("rerun with the same limit is a no-op",
           rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2, limit=2) == [])
+
+    # a disconnect mid-prefix: drop one finished sample, the resume asks only for it
+    with open(out) as f:
+        lines = f.readlines()
+    with open(out, "w") as f:
+        f.writelines(l for l in lines if not ('"sample_idx": 1' in l and prefixes[0]["prefix_id"] in l))
     work = rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2)
-    check("rerun only has the missing prefix", [r["prefix_id"] for r, _ in work] == [prefixes[2]["prefix_id"]])
-    rr.run(FakeLLM(), params, work, args, out, "h")
+    check("resume requests only the missing samples",
+          sorted((r["prefix_id"], i) for r, i in work)
+          == sorted([(prefixes[0]["prefix_id"], 1), (prefixes[2]["prefix_id"], 0), (prefixes[2]["prefix_id"], 1)]),
+          [(r["prefix_id"], i) for r, i in work])
+    llm = FakeLLM()
+    rr.run(llm, params, work, args, out, "h")
     rows = read_jsonl(out)
-    keys = [(r["prefix_id"], r["round"]) for r in rows]
-    check("no duplicate (prefix, round)", len(keys) == len(set(keys)) == 3, keys)
-    check("each row carries its own prefix's samples",
-          all(c["text"].startswith(f"s{r['seed']}-") for r in rows for c in r["continuations"]))
+    keys = [(r["prefix_id"], r["round"], r["sample_idx"]) for r in rows]
+    check("no duplicate (prefix, round, sample)", len(keys) == len(set(keys)) == 6, keys)
+    redo = [sp.seed for rid, sp in llm.llm_engine.added if rid.startswith(prefixes[0]["prefix_id"])]
+    check("the re-requested sample keeps its seed",
+          redo == [prefix_seed(0, prefixes[0]["prefix_id"], 0) + 1], redo)
+    check("third rerun has nothing to do", rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2) == [])
 
     llm = FakeLLM()
     with tempfile.TemporaryDirectory() as d2:
-        rr.run(llm, params, rr.todo(prefixes, {}, 0, 2), args, f"{d2}/r.jsonl", "h")
-        check("never more than --inflight prefixes on the engine", llm.llm_engine.max_seen <= 2,
+        small = types.SimpleNamespace(**{**vars(args), "inflight": 2})
+        rr.run(llm, params, rr.todo(prefixes, set(), 0, 2), small, f"{d2}/r.jsonl", "h")
+        check("never more than --inflight continuations on the engine", llm.llm_engine.max_seen <= 2,
               llm.llm_engine.max_seen)
-        check("all prefixes written", len(read_jsonl(f"{d2}/r.jsonl")) == 3)
-    check("third rerun has nothing to do", rr.todo(prefixes, rr.done_rows(out, prefixes), 0, 2) == [])
+        check("all continuations written", len(read_jsonl(f"{d2}/r.jsonl")) == 6)
 
     top = types.SimpleNamespace(**{**vars(args), "round": 1})
     work = rr.todo(prefixes, rr.done_rows(out, prefixes), 1, 2, {prefixes[0]["prefix_id"]: 3})
     check("top-up picks only overridden prefixes, with their n",
-          [(r["prefix_id"], n) for r, n in work] == [(prefixes[0]["prefix_id"], 3)])
+          sorted((r["prefix_id"], i) for r, i in work) == [(prefixes[0]["prefix_id"], i) for i in range(3)])
     rr.run(FakeLLM(), params, work, top, out, "h")
     rows = read_jsonl(out)
     r0 = [r for r in rows if r["prefix_id"] == prefixes[0]["prefix_id"]]
-    check("top-up appended as round 1", sorted(r["round"] for r in r0) == [0, 1])
-    check("round 1 draws a different seed", r0[0]["seed"] != r0[1]["seed"])
-    check("seed is deterministic", r0[1]["seed"] == prefix_seed(0, prefixes[0]["prefix_id"], 1))
+    check("top-up appended as round 1", sorted(r["round"] for r in r0) == [0, 0, 1, 1, 1])
+    seeds0 = {r["seed"] for r in r0 if r["round"] == 0}
+    seeds1 = {r["seed"] for r in r0 if r["round"] == 1}
+    check("round 1 draws a different seed stream", not seeds0 & seeds1)
     pooled = analyze.pool_rounds(rows)
     check("analysis pools rounds: 2 + 3 continuations", len(pooled[prefixes[0]["prefix_id"]]) == 5)
+    s = analyze.prefix_stats(pooled[prefixes[0]["prefix_id"]], "12")
+    check("prefix stats read continuation rows", s["n"] == 5 and s["k"] == 5, s)
 
     changed = [dict(prefixes[0], prefix_gen_token_ids=[7, 7])] + prefixes[1:]
     try:

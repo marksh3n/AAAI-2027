@@ -64,11 +64,12 @@ def prefix_stats(conts, gold):
 
 
 def pool_rounds(rows):
-    # every round's continuations for a prefix; a re-written (prefix, round) keeps the last
-    last = {(r["prefix_id"], r["round"]): r for r in rows}
+    # one row per continuation; every round's rows for a prefix, a re-written
+    # (prefix, round, sample) keeps the last
+    last = {(r["prefix_id"], r["round"], r["sample_idx"]): r for r in rows}
     out = defaultdict(list)
-    for (pid, _), r in sorted(last.items(), key=lambda kv: kv[0][1]):
-        out[pid] += r["continuations"]
+    for key in sorted(last, key=lambda k: (k[1], k[2])):
+        out[key[0]].append(last[key])
     return out
 
 

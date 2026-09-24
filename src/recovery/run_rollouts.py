@@ -1,13 +1,15 @@
-# n continuations per prefix with vLLM, fed token ids only. resumable: one record per
-# (prefix_id, round), written once all n samples for that prefix are back.
+# n continuations per prefix with vLLM, fed token ids only. one request and one output
+# row per continuation, written the moment it finishes, so a disconnect loses only the
+# continuations still running. resume re-requests only the missing (prefix, round, sample).
 import argparse, json, os, time
 
 from common import MODEL, OUT_DIR, TOP_P, answers_match, extract_boxed, prefix_seed, read_jsonl
 from cache import StaleCache, changed_keys, sha_obj, short
 
 VLLM_VERSION = "0.10.2"
-LOG_EVERY = 50
-LOG_SECONDS = 600  # slow GPUs: also log every 10 min
+LOG_SECONDS = 120
+# rows are one continuation each; bumping this refuses files in an older layout
+ROW_FORMAT = 2
 SMOKE = {"limit": 2, "n": 2, "max_tokens_cap": 256}
 
 
@@ -23,8 +25,8 @@ def add_args(parser):
                         help="jsonl of {prefix_id, n}: only these run, n extra samples each")
     parser.add_argument("--round", type=int, default=0)
     parser.add_argument("--max-tokens-cap", type=int, default=0, help="smoke only; 0 = none")
-    parser.add_argument("--inflight", type=int, default=16,
-                        help="prefixes on the engine at once (x n sequences)")
+    parser.add_argument("--inflight", type=int, default=256,
+                        help="continuations on the engine at once (vLLM's max_num_seqs is 256)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--smoke", action="store_true",
                         help=f"{SMOKE}, separate output, asserts samples differ")
@@ -36,6 +38,11 @@ def add_args(parser):
 def prefix_sha(rec):
     # binds an output row to the exact tokens it continued
     return sha_obj([rec["prompt_token_ids"], rec["prefix_gen_token_ids"]])
+
+
+def sample_seed(base, prefix_id, round_, idx):
+    # what vLLM gives child idx of an n>1 request seeded prefix_seed
+    return prefix_seed(base, prefix_id, round_) + idx
 
 
 def check_config(path, cfg):
@@ -52,35 +59,30 @@ def check_config(path, cfg):
 
 
 def todo(prefixes, done, round_, n, overrides=None, limit=0):
-    # (record, n) still to sample in this round, prefix-file order. limit picks the
-    # first N prefixes before skipping done ones, so a limited rerun is a no-op.
+    # (record, sample idx) still to sample in this round, prefix-file order. limit picks
+    # the first N prefixes before skipping done ones, so a limited rerun is a no-op.
+    if overrides is not None:
+        prefixes = [r for r in prefixes if r["prefix_id"] in overrides]
     if limit:
-        prefixes = [r for r in prefixes if overrides is None or r["prefix_id"] in overrides][:limit]
+        prefixes = prefixes[:limit]
     out = []
     for rec in prefixes:
         pid = rec["prefix_id"]
-        if overrides is not None:
-            if pid not in overrides:
-                continue
-            n_here = overrides[pid]
-        else:
-            n_here = n
-        if (pid, round_) in done:
-            continue
-        out.append((rec, n_here))
+        n_here = overrides[pid] if overrides is not None else n
+        out += [(rec, i) for i in range(n_here) if (pid, round_, i) not in done]
     return out
 
 
 def done_rows(path, prefixes):
-    # {(prefix_id, round): sha}; a done prefix whose tokens changed is a stale file
+    # {(prefix_id, round, sample_idx)}; a done prefix whose tokens changed is a stale file
     by_id = {r["prefix_id"]: r for r in prefixes}
-    done = {}
+    done = set()
     for row in read_jsonl(path):
         rec = by_id.get(row["prefix_id"])
         if rec is not None and prefix_sha(rec) != row["prefix_sha"]:
             raise StaleCache(f"{row['prefix_id']}: prefix tokens differ from those {path} "
                              "was sampled on; use a new --out")
-        done[(row["prefix_id"], row["round"])] = row["prefix_sha"]
+        done.add((row["prefix_id"], row["round"], row["sample_idx"]))
     return done
 
 
@@ -119,38 +121,44 @@ def check_prompts(llm, make_params, recs):
 
 
 def run(llm, make_params, work, args, out, cfg_hash):
-    # rolling window of --inflight prefixes on the engine; each prefix is written the
-    # moment all n of its samples finish, so a straggler never holds up the others and
-    # a disconnect loses only unfinished prefixes
+    # up to --inflight continuations on the engine. requests stream token deltas, so the
+    # throughput log counts every generated token, not only finished continuations.
     engine, tokenizer = llm.llm_engine, llm.get_tokenizer()
-    queue, inflight = list(work), {}
-    start, tokens, seqs, done_n = time.time(), 0, 0, 0
-    last_n, last_t, total = 0, start, len(work)
+    queue, live = list(work), {}  # live: request id -> [rec, idx, params, text parts, n tokens]
+    prefix_text = {}
+    total, done_n, tokens = len(work), 0, 0
+    start = last_t = time.time()
+    last_tokens, done_tokens = 0, 0
     with open(out, "a") as f:
-        while queue or inflight:
-            while queue and len(inflight) < args.inflight:
-                rec, n = queue.pop(0)
+        while queue or live:
+            while queue and len(live) < args.inflight:
+                rec, idx = queue.pop(0)
                 cap = rec["max_tokens"]
                 if args.max_tokens_cap:
                     cap = min(cap, args.max_tokens_cap)
-                p = make_params(n=n, temperature=args.temp, top_p=args.top_p, max_tokens=cap,
-                                seed=prefix_seed(args.seed, rec["prefix_id"], args.round))
-                engine.add_request(rec["prefix_id"], {"prompt_token_ids": rec["prompt_token_ids"]
-                                                      + rec["prefix_gen_token_ids"]}, p)
-                inflight[rec["prefix_id"]] = (rec, n, p)
-            for out_ in engine.step():
-                if not out_.finished:
+                p = make_params(n=1, temperature=args.temp, top_p=args.top_p, max_tokens=cap,
+                                seed=sample_seed(args.seed, rec["prefix_id"], args.round, idx))
+                rid = f"{rec['prefix_id']}#{args.round}#{idx}"
+                engine.add_request(rid, {"prompt_token_ids": rec["prompt_token_ids"]
+                                         + rec["prefix_gen_token_ids"]}, p)
+                live[rid] = [rec, idx, p, [], 0]
+            for o in engine.step():
+                slot = live[o.request_id]
+                c = o.outputs[0] if o.outputs else None
+                if c is not None:
+                    slot[3].append(c.text)
+                    slot[4] += len(c.token_ids)
+                    tokens += len(c.token_ids)
+                if not o.finished:
                     continue
-                rec, n, p = inflight.pop(out_.request_id)
-                prefix_text = tokenizer.decode(rec["prefix_gen_token_ids"])
-                conts = [score(prefix_text, rec["gold_answer"], o.text, len(o.token_ids),
-                               o.finish_reason) for o in out_.outputs]
-                tokens += sum(c["n_gen"] for c in conts)
-                seqs += len(conts)
-                f.write(json.dumps({
-                    "prefix_id": rec["prefix_id"],
+                rec, idx, p, parts, n_gen = live.pop(o.request_id)
+                pid = rec["prefix_id"]
+                if pid not in prefix_text:
+                    prefix_text[pid] = tokenizer.decode(rec["prefix_gen_token_ids"])
+                row = {
+                    "prefix_id": pid,
                     "round": args.round,
-                    "n": n,
+                    "sample_idx": idx,
                     "seed": p.seed,
                     "max_tokens": p.max_tokens,
                     "prefix_sha": prefix_sha(rec),
@@ -160,19 +168,26 @@ def run(llm, make_params, work, args, out, cfg_hash):
                     "trace_id": rec["trace_id"],
                     "checkpoint": rec["checkpoint"],
                     "cut_token_idx": rec["cut_token_idx"],
-                    "continuations": conts,
-                }) + "\n")
+                    **score(prefix_text[pid], rec["gold_answer"], "".join(parts), n_gen,
+                            c.finish_reason if c is not None else None),
+                }
+                f.write(json.dumps(row) + "\n")
                 f.flush()
                 done_n += 1
+                done_tokens += n_gen
             now = time.time()
-            if done_n > last_n and (done_n - last_n >= LOG_EVERY or now - last_t >= LOG_SECONDS
-                                    or done_n == total):
-                last_n, last_t = done_n, now
-                rate = tokens / (now - start)
-                eta = (total - done_n) * (tokens / done_n) / rate / 3600 if rate else float("nan")
-                print(f"{done_n}/{total} prefixes | {rate:,.0f} gen tok/s | "
-                      f"mean continuation {tokens / seqs:,.0f} tok | "
-                      f"~{eta:.2f} h left for {total - done_n} prefixes", flush=True)
+            if now - last_t >= LOG_SECONDS or (done_n == total and not live and not queue):
+                window = (tokens - last_tokens) / (now - last_t) if now > last_t else 0.0
+                overall = tokens / (now - start) if now > start else 0.0
+                # remaining work guessed from finished continuations; early on, short ones
+                # finish first, so this runs low until the long ones start landing
+                mean_len = done_tokens / done_n if done_n else float("nan")
+                left = max((total - done_n) * mean_len - (tokens - done_tokens), 0.0)
+                eta = left / overall / 3600 if overall and done_n else float("nan")
+                print(f"{done_n}/{total} continuations | {window:,.0f} gen tok/s now, "
+                      f"{overall:,.0f} overall | {len(live)} running | {tokens / 1e6:.2f}M tokens | "
+                      f"mean finished length {mean_len:,.0f} | ~{eta:.2f} h left", flush=True)
+                last_t, last_tokens = now, tokens
 
 
 def main():
@@ -193,9 +208,9 @@ def main():
     from vllm.sampling_params import RequestOutputKind
 
     def make_params(**kw):
-        # one output per prefix, once all n samples are done (what llm.generate sets)
+        # stream token deltas so every generated token is counted as it lands
         sp = SamplingParams(**kw)
-        sp.output_kind = RequestOutputKind.FINAL_ONLY
+        sp.output_kind = RequestOutputKind.DELTA
         return sp
 
     prefixes = read_jsonl(args.prefix_file)
@@ -203,14 +218,14 @@ def main():
     if args.n_override_file:
         overrides = {r["prefix_id"]: int(r["n"]) for r in read_jsonl(args.n_override_file)}
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    cfg = {"model": MODEL, "temp": args.temp,
-           "top_p": args.top_p, "max_tokens_cap": args.max_tokens_cap}
+    cfg = {"model": MODEL, "temp": args.temp, "top_p": args.top_p,
+           "max_tokens_cap": args.max_tokens_cap, "row_format": ROW_FORMAT}
     cfg_hash = check_config(f"{args.out}.config.json", cfg)
     done = done_rows(args.out, prefixes)
     work = todo(prefixes, done, args.round, args.n, overrides, args.limit)
     print(f"config {short(cfg_hash)}: temp {args.temp}, top_p {args.top_p}, round {args.round}; "
-          f"{len(work)} prefixes to sample, {len(done)} (prefix, round) rows already in {args.out}",
-          flush=True)
+          f"{len(work)} continuations to sample over {len({r['prefix_id'] for r, _ in work})} "
+          f"prefixes, {len(done)} already in {args.out}", flush=True)
     if not work:
         return
 
@@ -223,13 +238,13 @@ def main():
     run(llm, make_params, work, args, args.out, cfg_hash)
 
     if args.smoke:
-        ids = {r["prefix_id"] for r, _ in work}
+        texts = {}
         for row in read_jsonl(args.out):
-            if row["prefix_id"] in ids and row["round"] == args.round:
-                texts = {c["text"] for c in row["continuations"]}
-                if len(texts) < 2:
-                    raise AssertionError(f"{row['prefix_id']}: all {row['n']} continuations are "
-                                         "identical; seeding is broken")
+            if row["round"] == args.round:
+                texts.setdefault(row["prefix_id"], set()).add(row["text"])
+        for pid in {r["prefix_id"] for r, _ in work}:
+            if len(texts.get(pid, ())) < 2:
+                raise AssertionError(f"{pid}: its continuations are all identical; seeding is broken")
         print("smoke ok: continuations differ within each prefix", flush=True)
 
 
