@@ -134,10 +134,13 @@ def main():
         f"Paired bootstrap over traces: Δ [{lo:+.3f}, {hi:+.3f}], p = {boot_p(bd):.3f}.",
         f"Across {N_SEEDS} fold seeds: Δ mean {dels.mean():+.3f}, range [{dels.min():+.3f}, {dels.max():+.3f}]; "
         f"hidden > length in {int((dels > 0).sum())}/{N_SEEDS}.",
-        ("In plain words: between problems, the probe beats counting steps by a small but consistent margin."
+        ("In plain words: between problems, the probe beats counting steps by a small but reliable margin."
          if sig else
-         "In plain words: between problems, the probe is not reliably better than counting steps; the 0.033 gap "
-         "is within the noise of one test set and one fold split."),
+         f"In plain words: between problems, the probe edges out counting steps in {int((dels > 0).sum())}/{N_SEEDS} "
+         f"fold splits (mean {dels.mean():+.3f}), but with {len(last)} traces the sampling interval includes 0, so "
+         "the data cannot tell the probe from a step count." if dels.min() > 0 else
+         "In plain words: between problems, the probe is not reliably better than counting steps; the gap flips "
+         "sign across fold splits and its sampling interval includes 0."),
     ]
     json.dump(result, open(path, "w"), indent=2, default=float)
     print("\n".join(result["plain"]))
