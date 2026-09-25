@@ -284,23 +284,35 @@ def plain_lines(ckpts, res, deltas, permdf, layers):
     r, n = get(last, "lr/raw"), get(last, "len")
     d = delta_row(deltas, last, l, "lr/raw", "len")
     if r and n and d is not None:
-        beats = d.ci_low > 0
-        out.append(f"At `{last}` (layer {l}) the hidden-state probe scores {fci(r['within'], *r['ci'])} within problem "
-                   f"against {fci(n['within'], *n['ci'])} for length: Δ {fdelta(d)}, so hidden states "
-                   + ("do separate correct from wrong attempts beyond what length gives." if beats else
+        beats = d.p_holm_primary < 0.05
+        out.append(f"Primary test at `{last}` (layer {l}): the hidden-state probe scores {fci(r['within'], *r['ci'])} "
+                   f"within problem against {fci(n['within'], *n['ci'])} for length, Δ {fdelta(d)}, Holm p = "
+                   f"{d.p_holm_primary:.2f}; hidden states "
+                   + ("separate correct from wrong attempts beyond what length gives." if beats else
                       "do not separate correct from wrong attempts detectably beyond length."))
     early = [c for c in ckpts if c != last]
     if early:
         vals = [get(c, "lr/raw") for c in early if get(c, "lr/raw")]
         above = sum(v["ci"][0] > 0.5 for v in vals)
+        pe = deltas[(deltas.role == "primary") & deltas.checkpoint.isin(early)]
         out.append(f"Before `{last}`, lr/raw ranges {min(v['within'] for v in vals):.3f}–"
                    f"{max(v['within'] for v in vals):.3f} over {', '.join(early)}; {above} of {len(vals)} "
-                   "CIs sit above 0.5.")
+                   f"uncorrected CIs sit above 0.5, and the smallest primary p against length is "
+                   f"{pe.p_boot.min():.2f} (Holm {pe.p_holm_primary.min():.2f}): "
+                   + (f"hidden states beat length early, at {', '.join(pe[pe.p_holm_primary < 0.05].checkpoint)}."
+                      if (pe.p_holm_primary < 0.05).any() else "no early signal beyond length."))
     d2 = delta_row(deltas, last, l, "svd50+len", "len")
     if d2 is not None:
-        out.append(f"Incremental test at `{last}`: adding hidden states (SVD-50) to length changes AUROC by "
-                   f"{fdelta(d2)} — " + ("hidden states add information over length." if d2.ci_low > 0 else
-                                        "no detectable information over length."))
+        others = [f"layer {o}: {fdelta(delta_row(deltas, last, o, 'svd50+len', 'len'))}" for o in layers if o != l]
+        if d2.ci_low > 0.01:
+            verdict = "hidden states add information over length (exploratory, uncorrected)."
+        elif d2.ci_low > 0:
+            verdict = ("borderline: the CI only just clears 0 in one of the exploratory, uncorrected comparisons, "
+                       "so at most a small increment over length.")
+        else:
+            verdict = "no detectable information over length."
+        out.append(f"Incremental test at `{last}` (exploratory): adding hidden states (SVD-50) to length changes AUROC "
+                   f"by {fdelta(d2)}" + (f" ({'; '.join(others)})" if others else "") + f" — {verdict}")
     nl = [(a, get(last, a)) for a in ("hgb/svd50", "hgb/topk50", "mlp/svd50", "mlp/topk50") if get(last, a)]
     if nl:
         a, best = max(nl, key=lambda t: t[1]["within"])
