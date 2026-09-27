@@ -9,6 +9,9 @@ from common import (MAX_NEW, OUT_DIR, canonical, encode_trace, load_tokenizer, o
 
 FRACTIONS = {"f25": 0.25, "f50": 0.50, "f75": 0.75}
 THINK_END = "</think>"
+# ceiling design: the probe_cmp checkpoints, cut at exactly that many tokens (as the probes
+# read them, no step snapping), plus one t0 restart per problem
+CEILING_POSITIONS = (512, 2048, 4096)
 
 
 def cut_points(text, offsets):
@@ -134,8 +137,122 @@ def record(prefix_id, trace, problem, ckpt, cut, requested, p_ids, gen_ids, pass
     }
 
 
+def ceiling_population(traces, lens, min_len):
+    # probe_cmp's fixed population: untruncated traces whose retokenized length reaches
+    # min_len, then problems with a correct and a wrong trace among them. every trace kept.
+    ok = [t for t in traces if not t["trunc"] and t["n_gen"] < MAX_NEW and lens[t["trace_id"]] >= min_len]
+    by_problem = defaultdict(list)
+    for t in ok:
+        by_problem[t["problem_id"]].append(t)
+    return {pid: sorted(ts, key=lambda t: t["trace_id"]) for pid, ts in sorted(by_problem.items())
+            if len({t["is_correct"] for t in ts}) == 2}
+
+
+def est_cont_tokens(all_traces, cut, cap):
+    # expected continuation length from cut: the problem's own tag-B traces (truncated ones
+    # count at the cap) that ran past cut. only a planning number, never used as a cap.
+    left = [min(t["n_gen"], MAX_NEW) - cut for t in all_traces if t["n_gen"] > cut]
+    return int(min(np.mean(left), cap)) if left else cap
+
+
+def tier_order(units, target, seed):
+    # units: {problem_id: (pass rate, est tokens)}. problems drawn round-robin across pass
+    # bins in a seeded random order; tier 1 is the shortest prefix of that order reaching
+    # target tokens, tier 2 the rest. returns [(problem_id, tier)] in run order.
+    rng = np.random.default_rng(seed)
+    pools = defaultdict(list)
+    for pid in sorted(units):
+        pools[pass_bin(units[pid][0])].append(pid)
+    pools = {k: [int(x) for x in rng.permutation(v)] for k, v in sorted(pools.items())}
+    order = []
+    while any(pools.values()):
+        for key in sorted(pools):
+            if pools[key]:
+                order.append(pools[key].pop(0))
+    out, total, tier = [], 0, 1
+    for pid in order:
+        if tier == 1 and total >= target:
+            tier = 2
+        out.append((pid, tier))
+        total += units[pid][1]
+    return out
+
+
+def build_ceiling(args, tokenizer, traces):
+    lens, enc = {}, {}
+    for t in traces:
+        if not t["trunc"] and t["n_gen"] < MAX_NEW:
+            enc[t["trace_id"]] = encode_trace(tokenizer, t["text"])[0]
+        lens[t["trace_id"]] = len(enc[t["trace_id"]]) if t["trace_id"] in enc else 0
+    pop = ceiling_population(traces, lens, max(args.positions))
+    n_traces = sum(map(len, pop.values()))
+    drift = [t["trace_id"] for ts in pop.values() for t in ts if not canonical(t, enc[t["trace_id"]])]
+    print(f"population: {n_traces} traces over {len(pop)} mixed problems "
+          f"({sum(t['is_correct'] for ts in pop.values() for t in ts)} correct); "
+          f"{len(drift)} fail the retokenization count check (kept, flagged canonical=false)")
+
+    by_problem = defaultdict(list)
+    for t in traces:
+        by_problem[t["problem_id"]].append(t)
+    per_problem, units = {}, {}
+    for pid, ts in pop.items():
+        problem = dict(ts[0])
+        problem["_prompt"] = build_prompt(tokenizer, problem["problem"])
+        p_ids = prompt_ids(tokenizer, problem["problem"])
+        everyone = by_problem[pid]
+        pass_k, pass_n = sum(t["is_correct"] for t in everyone), len(everyone)
+        recs = [record(f"ceil/{pid}/t0", None, problem, "t0", 0, 0, p_ids, [], pass_k, pass_n)]
+        for trace in ts:
+            ids = enc[trace["trace_id"]]
+            trace = dict(trace, _len=len(ids))
+            for pos in args.positions:
+                gen = ids[:pos]
+                # a cut inside a multi-byte character decodes to U+FFFD at the end
+                decoded = tokenizer.decode(gen).rstrip("\ufffd")
+                if not trace["text"].startswith(decoded):
+                    raise AssertionError(f"{trace['trace_id']} p{pos}: decode(ids[:{pos}]) is not "
+                                         f"a prefix of the stored text: ...{decoded[-60:]!r}")
+                recs.append(record(f"ceil/{trace['trace_id']}/p{pos}", trace, problem, f"p{pos}",
+                                   pos, pos, p_ids, gen, pass_k, pass_n))
+        for r in recs:
+            r["max_tokens"] = args.max_continuation
+            r["canonical"] = r["trace_id"] not in drift
+            r["est_cont_tokens"] = est_cont_tokens(everyone, r["cut_token_idx"], args.max_continuation)
+        per_problem[pid] = recs
+        units[pid] = (pass_k / pass_n, args.n * sum(r["est_cont_tokens"] for r in recs))
+
+    records = []
+    for rank, (pid, tier) in enumerate(tier_order(units, args.tier1_tokens, args.seed)):
+        for r in per_problem[pid]:
+            records.append(dict(r, tier=tier, order=len(records), problem_rank=rank))
+    return records
+
+
+def ceiling_report(records, n):
+    print(f"\n{len(records)} prefixes, est. tokens at n={n} (from tag-B lengths of the same problem):")
+    for key in ("checkpoint", "tier"):
+        c, tok = Counter(), Counter()
+        for r in records:
+            c[r[key]] += 1
+            tok[r[key]] += n * r["est_cont_tokens"]
+        for k in sorted(c, key=str):
+            print(f"  {key} {k}: {c[k]} prefixes, {tok[k] / 1e6:.1f}M tokens")
+    for tier in (1, 2):
+        pids = {r["problem_id"] for r in records if r["tier"] == tier}
+        print(f"  tier {tier}: {len(pids)} problems, pass bins "
+              f"{dict(Counter(pass_bin(next(r['problem_pass_k'] / r['problem_pass_n'] for r in records if r['problem_id'] == p)) for p in pids))}")
+    print(f"  total {n * sum(r['est_cont_tokens'] for r in records) / 1e6:.1f}M tokens")
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--design", choices=["checkpoints", "ceiling"], default="checkpoints")
+    parser.add_argument("--positions", type=int, nargs="+", default=list(CEILING_POSITIONS),
+                        help="ceiling: exact token cuts; the population must reach the largest")
+    parser.add_argument("--max-continuation", type=int, default=MAX_NEW, help="ceiling: max_tokens")
+    parser.add_argument("--n", type=int, default=8, help="ceiling: samples per prefix, for estimates")
+    parser.add_argument("--tier1-tokens", type=float, default=12.5e6, help="ceiling: tier 1 size")
+    parser.add_argument("--data-dir", default=None, help="where traces_<tag>.jsonl lives")
     parser.add_argument("--tag", default="B")
     parser.add_argument("--n-problems", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
@@ -146,7 +263,19 @@ def main():
         raise SystemExit(f"{args.out} exists; rollouts are keyed to it. --force to overwrite")
 
     tokenizer = load_tokenizer()
-    traces = [json.loads(line) for line in open(out_path(args.tag))]
+    path = out_path(args.tag)
+    if args.data_dir:
+        path = os.path.join(args.data_dir, os.path.basename(path))
+    traces = [json.loads(line) for line in open(path)]
+    if args.design == "ceiling":
+        records = build_ceiling(args, tokenizer, traces)
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        with open(args.out, "w") as f:
+            for r in records:
+                f.write(json.dumps(r) + "\n")
+        ceiling_report(records, args.n)
+        print(f"-> {args.out}")
+        return
     enc, eligible, why = {}, {}, Counter()
     for t in traces:
         if t["trunc"]:

@@ -52,7 +52,16 @@ def prefix_seed(base, prefix_id, round_):
 
 
 def read_jsonl(path):
+    # a file copied while its writer was mid-line ends in a torn line; only that one is skipped
     if not os.path.exists(path):
         return []
     with open(path) as f:
-        return [json.loads(line) for line in f if line.strip()]
+        lines = [line for line in f if line.strip()]
+    out = [json.loads(line) for line in lines[:-1]]
+    if lines:
+        try:
+            out.append(json.loads(lines[-1]))
+        except json.JSONDecodeError:
+            if lines[-1].endswith("\n"):
+                raise
+    return out

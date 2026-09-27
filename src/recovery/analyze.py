@@ -63,10 +63,20 @@ def prefix_stats(conts, gold):
     }
 
 
+def continuations(rows):
+    # row format 3 holds a prefix's n samples in one row; older files have one per sample
+    for r in rows:
+        if "samples" in r:
+            head = {k: v for k, v in r.items() if k != "samples"}
+            yield from ({**head, **s} for s in r["samples"])
+        else:
+            yield r
+
+
 def pool_rounds(rows):
-    # one row per continuation; every round's rows for a prefix, a re-written
+    # one entry per continuation; every round's samples for a prefix, a re-written
     # (prefix, round, sample) keeps the last
-    last = {(r["prefix_id"], r["round"], r["sample_idx"]): r for r in rows}
+    last = {(r["prefix_id"], r["round"], r["sample_idx"]): r for r in continuations(rows)}
     out = defaultdict(list)
     for key in sorted(last, key=lambda k: (k[1], k[2])):
         out[key[0]].append(last[key])
