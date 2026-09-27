@@ -18,6 +18,9 @@ ROW_FORMAT = 3
 SMOKE = {"limit": 2, "n": 2, "max_tokens_cap": 256}
 # all-in $/h per GPU; --rate-usd-hr overrides
 RATES = {"h100": 4.40, "h200": 4.99, "t4": 1.05}
+# vLLM max_num_seqs per GPU: the H200 has ~4.6M tokens of KV cache for this model and sat
+# at 39% with 190 sequences in its benchmark; the H100 has about half that
+MAX_SEQS = {"h100": 256, "h200": 384, "t4": 64}
 MARGIN_USD = 2.0  # stop starting problems this far below the budget
 HARD_MARGIN_USD = 0.5  # drop in-flight work and exit this far below it
 STARTUP_S = 240  # container start and model load, billed before this process's clock
@@ -37,10 +40,11 @@ def add_args(parser):
                         help="jsonl of {prefix_id, n}: only these run, n extra samples each")
     parser.add_argument("--round", type=int, default=0)
     parser.add_argument("--max-tokens-cap", type=int, default=0, help="smoke only; 0 = none")
-    parser.add_argument("--max-num-seqs", type=int, default=256, help="vLLM max_num_seqs")
+    parser.add_argument("--max-num-seqs", type=int, default=0, help="vLLM max_num_seqs; 0 = MAX_SEQS[--gpu]")
     parser.add_argument("--inflight", type=int, default=0,
-                        help="sequences handed to the engine at once; 0 = max-num-seqs + 64, "
-                             "so the scheduler always has waiting work")
+                        help="unfinished samples handed to the engine (a prefix goes in whole, "
+                             "so up to n-1 over); 0 = max-num-seqs + 64, so the scheduler always "
+                             "has waiting work")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--smoke", action="store_true",
                         help=f"{SMOKE}, separate output, asserts samples differ")
@@ -211,25 +215,39 @@ def units_of(work):
     return [u for _, u in units]
 
 
+class Live:
+    # one prefix on the engine: its n samples stream in as token deltas, each tagged with
+    # its child index, and each frees its slot the moment it finishes
+    def __init__(self, rec, params, est):
+        self.rec, self.params, self.est = rec, params, est
+        self.text = defaultdict(list)
+        self.tokens = Counter()
+        self.finish = {}
+
+    def add(self, c):
+        # returns 1 when this delta finishes a sample
+        self.text[c.index].append(c.text)
+        self.tokens[c.index] += len(c.token_ids)
+        if c.finish_reason is not None and c.index not in self.finish:
+            self.finish[c.index] = c.finish_reason
+            return 1
+        return 0
+
+
 def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.time):
-    # work: [(record, n)]. returns (stop reason or None, measured gen tok/s or None)
+    # work: [(record, n)]. returns (stop reason or None, measured gen tok/s or None).
+    # live_seqs counts unfinished samples, so the engine is refilled as soon as any sample
+    # ends, not when a prefix's slowest one does
     engine, tokenizer = llm.llm_engine, llm.get_tokenizer()
     units = units_of(work)
-    live, pending = {}, []  # live: request id -> (record, params, est tokens)
+    live, pending = {}, []  # live: request id -> Live
     next_unit, live_seqs, stop = 0, 0, None
-    tokens_done = 0  # generated tokens in rows written by this process
+    gen = 0  # generated tokens, counted from the deltas
     start = last_t = clock()
-    last_gen, gen_base = 0.0, engine_stats(llm).get("generation_tokens", 0.0)
+    last_gen = 0
     n_prefixes, n_done = len(work), 0
 
-    def generated():
-        # engine counter when available, else tokens of finished rows
-        stats = engine_stats(llm)
-        if "generation_tokens" in stats:
-            return stats["generation_tokens"] - gen_base, stats
-        return float(tokens_done), stats
-
-    def tok_s(gen, now):
+    def tok_s(now):
         return gen / (now - start) if now - start >= PLAN_WARMUP_S and gen > 0 else None
 
     def gate(unit, now):
@@ -238,13 +256,12 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
             return f"--max-minutes {args.max_minutes} reached"
         if not (budget and budget.limit):
             return None
-        gen, stats = generated()
-        rate = tok_s(gen, now) or PLAN_TOK_S
+        rate = tok_s(now) or PLAN_TOK_S
         # planned tokens still owed by prefixes admitted or promised, minus what they made so far
-        committed = sum(e for _, _, e in live.values()) + sum(est_tokens(r, n) for r, n in pending)
-        committed = max(committed - max(gen - tokens_done, 0), 0)
+        committed = sum(max(x.est - sum(x.tokens.values()), 0) for x in live.values()) \
+            + sum(est_tokens(r, n) for r, n in pending)
         new = sum(est_tokens(r, n) for r, n in unit)
-        per_seq = rate / max(stats.get("num_requests_running", 0) or args.max_num_seqs, 1)
+        per_seq = rate / max(live_seqs, args.max_num_seqs, 1)
         tail_s = max(r["max_tokens"] for r, _ in unit) / per_seq
         eta = budget.spent() + ((committed + new) / rate + tail_s) * budget.rate / 3600
         if eta >= budget.limit - MARGIN_USD:
@@ -274,23 +291,30 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
                 rid = f"{rec['prefix_id']}#{args.round}"
                 engine.add_request(rid, {"prompt_token_ids": rec["prompt_token_ids"]
                                          + rec["prefix_gen_token_ids"]}, p)
-                live[rid] = (rec, p, est_tokens(rec, n))
+                live[rid] = Live(rec, p, est_tokens(rec, n))
                 live_seqs += n
             if not live:
                 break
 
             for o in engine.step():
+                slot = live.get(o.request_id)
+                if slot is None:
+                    continue
+                for c in o.outputs:
+                    gen += len(c.token_ids)
+                    live_seqs -= slot.add(c)
                 if not o.finished:
                     continue
-                rec, p, _ = live.pop(o.request_id)
-                live_seqs -= p.n
+                del live[o.request_id]
+                rec, p = slot.rec, slot.params
+                live_seqs -= p.n - len(slot.finish)  # never leak a slot
                 pid = rec["prefix_id"]
                 prefix_text = tokenizer.decode(rec["prefix_gen_token_ids"])
                 # vLLM gives child i of a seeded n>1 request seed + i
-                samples = [{"sample_idx": c.index, "seed": p.seed + c.index,
-                            **score(prefix_text, rec["gold_answer"], c.text, len(c.token_ids),
-                                    c.finish_reason)}
-                           for c in sorted(o.outputs, key=lambda c: c.index)]
+                samples = [{"sample_idx": i, "seed": p.seed + i,
+                            **score(prefix_text, rec["gold_answer"], "".join(slot.text[i]),
+                                    slot.tokens[i], slot.finish.get(i))}
+                           for i in range(p.n)]
                 row = {
                     "prefix_id": pid,
                     "round": args.round,
@@ -310,7 +334,6 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
                 f.write(json.dumps(row) + "\n")
                 f.flush()
                 n_done += 1
-                tokens_done += sum(x["n_gen"] for x in samples)
 
             now = clock()
             hard = None
@@ -319,7 +342,7 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
             elif budget and budget.limit and budget.spent() >= budget.limit - HARD_MARGIN_USD:
                 hard = f"hard budget cap: ${budget.spent():.2f} spent of ${budget.limit:.2f}"
             if now - last_t >= LOG_SECONDS or hard or not live:
-                gen, stats = generated()
+                stats = engine_stats(llm)
                 window = (gen - last_gen) / (now - last_t) if now > last_t else 0.0
                 kv = stats.get("kv_cache_usage_perc", stats.get("gpu_cache_usage_perc", float("nan")))
                 money = ""
@@ -342,7 +365,6 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
                 print(f"stopping now: {hard}; dropping {len(live)} prefixes still running", flush=True)
                 stop = hard
                 break
-    gen, _ = generated()
     elapsed = clock() - start
     return stop, (gen / elapsed if elapsed > 0 and gen > 0 else None)
 
@@ -378,6 +400,8 @@ def main():
     args.out = args.out or f"{OUT_DIR}/rollouts.jsonl"
     if args.rate_usd_hr is None:
         args.rate_usd_hr = RATES[args.gpu]
+    if not args.max_num_seqs:
+        args.max_num_seqs = MAX_SEQS[args.gpu]
     if not args.inflight:
         args.inflight = args.max_num_seqs + 64
     if args.n_override_file and args.round < 1:
@@ -403,10 +427,9 @@ def main():
     from vllm.sampling_params import RequestOutputKind
 
     def make_params(**kw):
-        # the n samples come back together once the last finishes; tokens are counted
-        # from the engine's own counters meanwhile
+        # each sample streams its token deltas, so a finished sample is seen at once
         sp = SamplingParams(**kw)
-        sp.output_kind = RequestOutputKind.FINAL_ONLY
+        sp.output_kind = RequestOutputKind.DELTA
         return sp
 
     prefixes = read_jsonl(args.prefix_file)

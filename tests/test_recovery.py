@@ -133,26 +133,43 @@ print("\n5. resumability")
 
 
 class FakeEngine:
-    # FINAL_ONLY semantics: a request comes back once, finished, with all n samples. each
-    # step finishes the newest request, so completion order != submit order
+    # DELTA semantics with n>1: every step, each unfinished child of each request emits one
+    # token as its own output (tagged with its index); child i finishes after 2 + i tokens,
+    # and a request is finished once all its children are. the newest request steps first
     def __init__(self):
         self.live, self.max_seen, self.added, self.aborted = [], 0, [], []
+        self.overlap = False  # a new request arrived while an older one still ran
 
     def add_request(self, rid, prompt, sp):
-        self.live.append((rid, sp))
+        if self.live:
+            self.overlap = True
+        self.live.append([rid, sp, [0] * sp.n])
         self.added.append((rid, sp))
-        self.max_seen = max(self.max_seen, sum(x.n for _, x in self.live))
+        self.max_seen = max(self.max_seen, self.unfinished())
+
+    def unfinished(self):
+        return sum(k < 2 + i for _, _, ks in self.live for i, k in enumerate(ks))
 
     def abort_request(self, rids):
         self.aborted += rids
 
     def step(self):
-        if not self.live:
-            return []
-        rid, sp = self.live.pop()
-        return [types.SimpleNamespace(request_id=rid, finished=True, outputs=[
-            types.SimpleNamespace(index=i, text=f"s{sp.seed + i} \\boxed{{12}}", token_ids=[2, 3, 4],
-                                  finish_reason="stop") for i in reversed(range(sp.n))])]
+        outs = []
+        for item in reversed(list(self.live)):
+            rid, sp, ks = item
+            for i in range(sp.n):
+                if ks[i] >= 2 + i:
+                    continue
+                ks[i] += 1
+                done = ks[i] == 2 + i
+                all_done = all(k >= 2 + j for j, k in enumerate(ks))
+                text = f"s{sp.seed + i} " if ks[i] == 1 else ("\\boxed{12}" if done else ".")
+                outs.append(types.SimpleNamespace(request_id=rid, finished=all_done, outputs=[
+                    types.SimpleNamespace(index=i, text=text, token_ids=[1],
+                                          finish_reason="stop" if done else None)]))
+            if all(k >= 2 + j for j, k in enumerate(ks)):
+                self.live.remove(item)
+        return outs
 
 
 class FakeLLM:
@@ -183,7 +200,11 @@ with tempfile.TemporaryDirectory() as d:
     check("one row per prefix: 2 prefixes", len(rows) == 2, len(rows))
     check("each row holds its n samples, in index order",
           all([s["sample_idx"] for s in r["samples"]] == [0, 1] for r in rows))
-    check("token count per sample", all(s["n_gen"] == 3 for r in rows for s in r["samples"]))
+    check("token count per sample sums its deltas",
+          all(s["n_gen"] == 2 + s["sample_idx"] for r in rows for s in r["samples"]))
+    check("deltas stitched into each sample's text",
+          all(s["text"].startswith(f"s{s['seed']} ") and s["text"].endswith("\\boxed{12}")
+              for r in rows for s in r["samples"]), rows[0]["samples"][0]["text"])
     check("scored per sample", all(s["correct"] for r in rows for s in r["samples"]))
     pid0 = prefixes[0]["prefix_id"]
     r0 = next(r for r in rows if r["prefix_id"] == pid0)
@@ -217,8 +238,17 @@ with tempfile.TemporaryDirectory() as d:
     with tempfile.TemporaryDirectory() as d2:
         small = types.SimpleNamespace(**{**vars(args), "inflight": 4})
         rr.run(llm, params, rr.todo(prefixes, set(), 0, 2), small, f"{d2}/r.jsonl", "h")
-        check("never more than --inflight sequences on the engine", llm.llm_engine.max_seen <= 4,
-              llm.llm_engine.max_seen)
+        check("never more than --inflight + n - 1 unfinished samples on the engine",
+              llm.llm_engine.max_seen <= 4 + 2 - 1, llm.llm_engine.max_seen)
+    llm = FakeLLM()
+    with tempfile.TemporaryDirectory() as d2:
+        # inflight == n: the next prefix can only start on a slot freed by a finished sample
+        tight = types.SimpleNamespace(**{**vars(args), "inflight": 2})
+        rr.run(llm, params, rr.todo(prefixes, set(), 0, 2), tight, f"{d2}/r.jsonl", "h")
+        check("a finished sample frees its slot before its prefix is done", llm.llm_engine.overlap)
+        check("a prefix is admitted whole: at most inflight + n - 1 unfinished",
+              llm.llm_engine.max_seen <= 2 + 2 - 1, llm.llm_engine.max_seen)
+        check("all prefixes written", len(read_jsonl(f"{d2}/r.jsonl")) == 3)
         check("one request per prefix with n samples",
               [sp.n for _, sp in llm.llm_engine.added] == [2, 2, 2])
         check("all prefixes written", len(read_jsonl(f"{d2}/r.jsonl")) == 3)
