@@ -300,12 +300,17 @@ def plain_lines(ckpts, res, deltas, permdf, layers):
         vals = [get(c, "lr/raw") for c in early if get(c, "lr/raw")]
         above = sum(v["ci"][0] > 0.5 for v in vals)
         pe = deltas[(deltas.role == "primary") & deltas.checkpoint.isin(early)]
+        sig = pe.p_holm_primary < 0.05
+        up, down = pe[sig & (pe.delta > 0)], pe[sig & (pe.delta < 0)]
+        verdict = (f"hidden states beat length early, at {', '.join(up.checkpoint)}." if len(up)
+                   else "no early signal beyond length.")
+        if len(down):
+            verdict += (f" At {', '.join(down.checkpoint)} the probe is significantly *below* length, "
+                        "likely a small-sample CV artifact, not an inverse signal.")
         out.append(f"Before `{last}`, lr/raw ranges {min(v['within'] for v in vals):.3f}–"
                    f"{max(v['within'] for v in vals):.3f} over {', '.join(early)}; {above} of {len(vals)} "
                    f"uncorrected CIs sit above 0.5, and the smallest primary p against length is "
-                   f"{pe.p_boot.min():.2f} (Holm {pe.p_holm_primary.min():.2f}): "
-                   + (f"hidden states beat length early, at {', '.join(pe[pe.p_holm_primary < 0.05].checkpoint)}."
-                      if (pe.p_holm_primary < 0.05).any() else "no early signal beyond length."))
+                   f"{pe.p_boot.min():.2f} (Holm {pe.p_holm_primary.min():.2f}): " + verdict)
     d2 = delta_row(deltas, last, l, "svd50+len", "len")
     if d2 is not None:
         others = [f"layer {o}: {fdelta(delta_row(deltas, last, o, 'svd50+len', 'len'))}" for o in layers if o != l]

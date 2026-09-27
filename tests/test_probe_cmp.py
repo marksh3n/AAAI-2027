@@ -285,6 +285,20 @@ if r.returncode == 0:
     check("a rerun resumes from saved predictions", "already saved, skipping" in r2.stdout, r2.stdout[-300:])
     check("default run is not flagged exploratory", "Exploratory run" not in summ)
 
+# ---------- plain summary reads the sign: a significant negative delta is not "beats length"
+import report  # noqa: E402
+res = {(c, 20, "lr/raw"): {"within": v, "ci": (v - .1, v + .1)} for c, v in (("a", .42), ("b", .55), ("end", .78))}
+res[("end", report.NO_LAYER, "len")] = {"within": .77, "ci": (.7, .84)}
+dl = pd.DataFrame([{"layer": 20, "checkpoint": c, "arm_a": "lr/raw", "arm_b": "len", "delta": d, "ci_low": d - .1,
+                    "ci_high": d + .1, "p_boot": p, "role": "primary", "p_holm_primary": h}
+                   for c, d, p, h in (("a", -.13, .004, .03), ("b", .02, .5, 1.0), ("end", .01, .6, 1.0))])
+early = report.plain_lines(["a", "b", "end"], res, dl, pd.DataFrame(), [20])[1]
+check("significant negative delta is not reported as beating length",
+      "beat length" not in early and "below" in early and "no early signal beyond length" in early, early)
+dl.loc[dl.checkpoint == "b", ["delta", "p_holm_primary"]] = [.12, .01]
+early = report.plain_lines(["a", "b", "end"], res, dl, pd.DataFrame(), [20])[1]
+check("significant positive delta is reported as beating length", "beat length early, at b" in early, early)
+
 # ---------- extra layers + --exploratory: own output dir, flagged summary, layer 20 kept
 cmd3 = [sys.executable, os.path.join(ROOT, "src", "probe_cmp", "run.py"), "--data", tmp, "--out", out,
         "--registry", reg_path, "--checkpoints", "8", "--layers", "12", "--exploratory", "--perms", "0",
