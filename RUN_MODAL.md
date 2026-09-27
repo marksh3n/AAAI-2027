@@ -37,6 +37,25 @@ shasum -a 256 data/hf/traces_B.jsonl                     # starts with c8cb3d8f9
 scripts/modal_upload.sh                                  # -> /inputs/traces_B.jsonl on the Volume
 ```
 
+On Windows, use PowerShell in the repo root. It replaces the block above. Every `modal run`
+line under "Steps" works as written.
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # if uv is missing; then open a new terminal
+uv tool install modal
+modal setup
+uvx --from huggingface_hub hf download MarkSh3n/e0-shared traces_B.jsonl --repo-type dataset --local-dir data/hf
+(Get-FileHash data\hf\traces_B.jsonl -Algorithm SHA256).Hash    # starts with C8CB3D8F9B21453B?
+(Get-Content data\hf\traces_B.jsonl | Measure-Object -Line).Lines   # 2202?
+modal volume create e0-recovery
+modal volume put --force e0-recovery data/hf/traces_B.jsonl /inputs/traces_B.jsonl
+modal volume ls e0-recovery /inputs
+```
+
+If `modal` is not found after `uv tool install modal`, run `uv tool update-shell` and open
+a new terminal. Windows may print `PYTHONIOENCODING`/charmap errors when Modal prints
+progress bars. If it does, run `$env:PYTHONIOENCODING = "utf-8"` first.
+
 ## Steps
 
 ```bash
