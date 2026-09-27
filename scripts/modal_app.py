@@ -26,8 +26,11 @@ app = modal.App(NAME)
 vol = modal.Volume.from_name(NAME, create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    # vllm pins its own torch and transformers; generate.py imports datasets and math_verify
-    .uv_pip_install("vllm==0.10.2", "datasets", "math-verify>=0.5")
+    # vllm 0.10.2 leaves transformers unpinned, and transformers 5 both breaks it and loads
+    # this model's tokenizer as Qwen2Tokenizer, which drops the BOS that tag-B's string
+    # prompts got (two BOS). 4.56.2 is vllm 0.10.2's contemporary. generate.py imports
+    # datasets and math_verify
+    .uv_pip_install("vllm==0.10.2", "transformers==4.56.2", "datasets", "math-verify>=0.5")
     .env({"HF_HOME": f"{VOL}/hf", "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false"})
     .add_local_dir(ROOT / "src", "/root/src", ignore=["**/__pycache__", "**/*.pyc"])
 )

@@ -15,7 +15,7 @@ Code: `src/recovery/build_prefixes.py --design ceiling`, `src/recovery/run_rollo
 
 - Check out branch `siddhant/recovery-modal`. `data/` is not in git; the traces come from
   the HF dataset `MarkSh3n/e0-shared` (see "Once"). The file must have 2202 lines, and
-  `shasum -a 256` must start with `c8cb3d8f9b21453b`, the copy the prefixes were designed
+  its SHA-256 must start with `c8cb3d8f9b21453b`, the copy the prefixes were designed
   on. If the hash differs, tell Siddhant before going on.
 - Run the steps in order. **Stop after step 2 if the temp check doesn't print
   `VERDICT: T=0.7 is clearly best`.** **Stop after step 4 and send Siddhant the last ~30
@@ -25,36 +25,44 @@ Code: `src/recovery/build_prefixes.py --design ceiling`, `src/recovery/run_rollo
   inside vLLM, add `--gpu h100` to rerun it; that costs about $0.50.
 - `--budget` for step 5 is the Modal credit left at that point (Settings → Usage).
 
-## Once
+## Once: Windows (PowerShell)
 
-```bash
-brew install uv            # if uv is missing (or: curl -LsSf https://astral.sh/uv/install.sh | sh)
-uv tool install modal      # the modal CLI, in its own env
-modal setup                # log in (same as python -m modal setup)
-uvx --from huggingface_hub hf download MarkSh3n/e0-shared traces_B.jsonl \
-    --repo-type dataset --local-dir data/hf              # -> data/hf/traces_B.jsonl
-shasum -a 256 data/hf/traces_B.jsonl                     # starts with c8cb3d8f9b21453b?
-scripts/modal_upload.sh                                  # -> /inputs/traces_B.jsonl on the Volume
-```
-
-On Windows, use PowerShell in the repo root. It replaces the block above. Every `modal run`
-line under "Steps" works as written.
+Run each line on its own, in order. Skip the Mac/Linux block below.
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # if uv is missing; then open a new terminal
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # only if uv is missing; then open a new terminal
 uv tool install modal
 modal setup
+cd $HOME
+git clone https://github.com/marksh3n/Ghait---MJJS.git    # skip if cloned; then git fetch
+cd Ghait---MJJS
+git switch siddhant/recovery-modal
 uvx --from huggingface_hub hf download MarkSh3n/e0-shared traces_B.jsonl --repo-type dataset --local-dir data/hf
-(Get-FileHash data\hf\traces_B.jsonl -Algorithm SHA256).Hash    # starts with C8CB3D8F9B21453B?
-(Get-Content data\hf\traces_B.jsonl | Measure-Object -Line).Lines   # 2202?
-modal volume create e0-recovery
+(Get-FileHash data\hf\traces_B.jsonl -Algorithm SHA256).Hash         # must start with C8CB3D8F9B21453B
+(Get-Content data\hf\traces_B.jsonl | Measure-Object -Line).Lines    # must be 2202
+modal volume create e0-recovery                                       # "already exists" is fine
 modal volume put --force e0-recovery data/hf/traces_B.jsonl /inputs/traces_B.jsonl
 modal volume ls e0-recovery /inputs
 ```
 
-If `modal` is not found after `uv tool install modal`, run `uv tool update-shell` and open
-a new terminal. Windows may print `PYTHONIOENCODING`/charmap errors when Modal prints
-progress bars. If it does, run `$env:PYTHONIOENCODING = "utf-8"` first.
+- If `modal` is not found after `uv tool install modal`, run `uv tool update-shell` and
+  open a new terminal.
+- If Modal's progress bars cause charmap/encoding errors, run
+  `$env:PYTHONIOENCODING = "utf-8"` first.
+- Then go to "Steps". Run every step from the `Ghait---MJJS` folder. Each step is a single
+  line and works in PowerShell as written.
+
+## Once: Mac / Linux
+
+```bash
+brew install uv            # if uv is missing (or: curl -LsSf https://astral.sh/uv/install.sh | sh)
+uv tool install modal
+modal setup
+uvx --from huggingface_hub hf download MarkSh3n/e0-shared traces_B.jsonl \
+    --repo-type dataset --local-dir data/hf
+shasum -a 256 data/hf/traces_B.jsonl                     # starts with c8cb3d8f9b21453b?
+scripts/modal_upload.sh                                  # -> /inputs/traces_B.jsonl on the Volume
+```
 
 ## Steps
 

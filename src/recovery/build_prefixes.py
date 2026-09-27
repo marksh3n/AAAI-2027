@@ -199,6 +199,10 @@ def build_ceiling(args, tokenizer, traces):
         problem = dict(ts[0])
         problem["_prompt"] = build_prompt(tokenizer, problem["problem"])
         p_ids = prompt_ids(tokenizer, problem["problem"])
+        if p_ids[:2] != [tokenizer.bos_token_id] * 2:
+            raise AssertionError(f"problem {pid}: prompt opens {p_ids[:3]}, not two BOS "
+                                 f"({tokenizer.bos_token_id}) as tag-B was sampled; check the "
+                                 f"transformers version ({type(tokenizer).__name__})")
         everyone = by_problem[pid]
         pass_k, pass_n = sum(t["is_correct"] for t in everyone), len(everyone)
         recs = [record(f"ceil/{pid}/t0", None, problem, "t0", 0, 0, p_ids, [], pass_k, pass_n)]
