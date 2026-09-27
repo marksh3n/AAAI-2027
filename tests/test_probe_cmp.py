@@ -283,6 +283,22 @@ if r.returncode == 0:
     check("summary states orientation and layer convention", "P(wrong)" in summ and "hidden_states[l+1]" in summ)
     r2 = subprocess.run(cmd, capture_output=True, text=True)
     check("a rerun resumes from saved predictions", "already saved, skipping" in r2.stdout, r2.stdout[-300:])
+    check("default run is not flagged exploratory", "Exploratory run" not in summ)
+
+# ---------- extra layers + --exploratory: own output dir, flagged summary, layer 20 kept
+cmd3 = [sys.executable, os.path.join(ROOT, "src", "probe_cmp", "run.py"), "--data", tmp, "--out", out,
+        "--registry", reg_path, "--checkpoints", "8", "--layers", "12", "--exploratory", "--perms", "0",
+        "--jobs", "1", "--min-problems", "5"]
+r3 = subprocess.run(cmd3, capture_output=True, text=True)
+check("run.py --layers 12 --exploratory exits cleanly", r3.returncode == 0, r3.stderr[-800:])
+e = os.path.join(out, "L20-12", "subset_8")
+if r3.returncode == 0:
+    check("extra layers write to their own dir, not over the default run", os.path.exists(os.path.join(e, "summary.md"))
+          and not os.path.exists(os.path.join(out, "subset_8")))
+    check("summary flagged exploratory", "Exploratory run" in open(os.path.join(e, "summary.md")).read())
+    check("population.json records the flag", json.load(open(os.path.join(e, "population.json")))["exploratory"])
+    ls = set(pd.read_csv(os.path.join(e, "results_long.csv")).layer.astype(str))
+    check("layer 20 kept alongside 12", {"20", "12"} <= ls, str(sorted(ls)))
 
 print()
 if fails:

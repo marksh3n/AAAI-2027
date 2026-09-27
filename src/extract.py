@@ -26,7 +26,7 @@ LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # decoder block index; -1 is the emb
 # absolute generation offsets, defined as TOKENS OBSERVED (a 1-indexed count).
 # pos=128 means "after seeing 128 tokens" -> hidden state at trace_ids[127],
 # text prefix trace_ids[:128]. Both then reflect exactly the same 128 tokens.
-POSITIONS = [128, 256, 512, 1024, 2048, 4096]
+POSITIONS = [128, 256, 512, 1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768]
 MIN_STEP_TOKENS = 5
 CHUNK = 1024
 # bump when the extraction convention changes; invalidates every cached part

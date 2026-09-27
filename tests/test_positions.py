@@ -79,7 +79,7 @@ print("\n3. unextracted position refused")
 check("bad position rejected", not run(base + ["--positions", "999"]))
 
 print("\n4. POSITIONS not mutated")
-check("module POSITIONS intact", pf.POSITIONS == [128, 256, 512, 1024, 2048, 4096], pf.POSITIONS)
+check("module POSITIONS intact", pf.POSITIONS == [128, 256, 512, 1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768], pf.POSITIONS)
 check("full run still works after subset runs", run(base))
 check("full run gets its own file", os.path.exists("data/ablation_T_L16_svd5.json"))
 

@@ -94,10 +94,23 @@ def main():
     ap.add_argument("--jobs", type=int, default=-1, help="workers for the permutation null")
     ap.add_argument("--min-problems", type=int, default=MIN_PROBLEMS)
     ap.add_argument("--perms", type=int, default=None, help="override the permutation count")
+    ap.add_argument("--layers", type=int, nargs="+", default=None,
+                    help=f"default {LAYERS} ({PRIMARY_LAYER} under --quick); layer {PRIMARY_LAYER} is always "
+                         "kept, extra layers are exploratory and get their own output dir")
+    ap.add_argument("--exploratory", action="store_true",
+                    help="checkpoint set or layers chosen after seeing results; flagged in summary.md")
     a = ap.parse_args()
     seeds, n_perm, layers = ([0], 50, [PRIMARY_LAYER]) if a.quick else (SEEDS, N_PERM, LAYERS)
+    default_layers = layers
+    if a.layers:
+        # canonical order, so the same set always maps to the same config and dir
+        layers = [PRIMARY_LAYER] + sorted(set(a.layers) - {PRIMARY_LAYER}, reverse=True)
     n_perm = n_perm if a.perms is None else a.perms
     base = a.out or "data/probe_cmp"
+    if layers != default_layers:
+        # a different layer set changes the run config: never refit over the default run's files.
+        # nested, so report.py still finds delong.json / reextract_check.json three levels up
+        base = os.path.join(base, "L" + "-".join(map(str, layers)))
     out = os.path.join(base, "quick") if a.quick else base  # a quick run never overwrites a full one
     os.makedirs(os.path.join(out, "preds"), exist_ok=True)
     t_start = time.time()
@@ -133,13 +146,19 @@ def main():
                  "stopping rather than changing the design. see validate.py for candidate sets.")
 
     pop_sha = sha({"trace_ids": pop.trace_id.tolist(), "ckpts": ckpts})
+    pop_path = os.path.join(out, "population.json")
+    exploratory = a.exploratory
+    if os.path.exists(pop_path):
+        # once flagged, a resumed run of the same population stays flagged
+        old = json.load(open(pop_path))
+        exploratory |= bool(old.get("exploratory")) and old.get("population_sha") == pop_sha
     json.dump({"checkpoints": ckpts, "population_sha": pop_sha, "excluded_truncated": n_trunc,
                "excluded_trace_ids": store.traces.index[~store.traces.eligible].tolist(),
                "n_traces": len(pop), "n_problems": n_prob, "n_wrong": int(pop.y.sum()),
                "n_pairs": D.pair_total(pop), "trace_ids": pop.trace_id.tolist(),
                "problem_ids": pop.problem_id.tolist(), "y_wrong": pop.y.tolist(),
-               "varying_secondary": varying.to_dict("records")},
-              open(os.path.join(out, "population.json"), "w"), indent=1)
+               "varying_secondary": varying.to_dict("records"), "exploratory": exploratory},
+              open(pop_path, "w"), indent=1)
     # one folds.json per population, shared by --quick and the full run
     folds_by_seed = load_or_make_folds(os.path.join(base, "folds.json"), pop, pop_sha)
     folds = {s: fold_indices(pop, folds_by_seed[str(s)]) for s in seeds}

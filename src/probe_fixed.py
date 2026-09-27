@@ -13,7 +13,7 @@ from scipy.sparse import csr_matrix, hstack
 from cache import StaleCache, check_dataset_manifest, short
 
 LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]
-POSITIONS = [128, 256, 512, 1024, 2048, 4096]
+POSITIONS = [128, 256, 512, 1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768]
 N_OUTER = 5
 N_INNER = 3
 CS = [0.001, 0.01, 0.1, 1.0]
@@ -370,9 +370,9 @@ def main():
                              "concatenating (0 to keep all 1536); fitted per training fold")
     parser.add_argument("--seeds", type=int, default=N_SEEDS,
                         help="number of outer-fold assignments to average over")
-    parser.add_argument("--positions", default="",
-                        help="comma-separated subset of the extracted positions to score, "
-                             "e.g. 128 or 128,512,1024; default all. the yield table always "
+    parser.add_argument("--positions", nargs="+", default=[],
+                        help="comma- or space-separated subset of the extracted positions to score, "
+                             "e.g. 128 or 128,512,1024 or 128 512 1024; default all. the yield table always "
                              "covers every position, since that is the context for reading "
                              "any of them")
     parser.add_argument("--null-reps", type=int, default=NULL_REPS,
@@ -410,7 +410,7 @@ def main():
     # POSITIONS stays whole; the manifest check above compares against it
     positions = POSITIONS
     if args.positions:
-        positions = [int(v) for v in args.positions.split(",") if v.strip()]
+        positions = [int(v) for v in ",".join(args.positions).split(",") if v.strip()]
         unknown = [v for v in positions if v not in POSITIONS]
         if unknown:
             raise SystemExit(f"--positions {unknown} not extracted; available: {POSITIONS}")

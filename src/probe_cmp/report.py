@@ -179,6 +179,10 @@ def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, pe
     w = L.append
     n_expl = int((deltas.role == "exploratory").sum())
     w("# Probe comparison across checkpoints (E0)\n")
+    if json.load(open(os.path.join(out, "population.json"))).get("exploratory"):
+        w("> **Exploratory run.** The checkpoint set or layers were chosen after seeing earlier results. "
+          "Labels below such as *primary* and *Holm* describe the pipeline's layout, not a pre-declared "
+          "test: read every number here as exploratory.\n")
     w("- **Question:** within a problem, do hidden states separate correct from wrong traces beyond "
       "visible features? Primary metric: within-problem AUROC, problems weighted by their "
       "correct×wrong pairs.")
@@ -194,7 +198,8 @@ def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, pe
         for name, (src, _) in store.sources.items()) + ".")
     w(f"- **Layer convention:** layer *l* = HF `output_hidden_states[l+1]` "
       f"({store.convention}); l = −1 is the embedding output, 27 is after the final RMSNorm. "
-      f"Layers 16 and 20 therefore mean the residual stream after decoder blocks 16 and 20 (0-indexed). "
+      f"Layers {', '.join(map(str, sorted(layers)))} therefore mean the residual stream after those decoder "
+      f"blocks (0-indexed). "
       f"Every source is registered with this convention; per-layer norm profiles agree across sources, and "
       f"the GPU re-extraction check below tests it row by row.")
     if any(src.get("name_col") for src, _ in store.sources.values()):
@@ -358,7 +363,7 @@ def plot(out, ckpts, res, permdf, layer):
             col, ls = color[arm], "--" if arm in SHARED else "-"
             ax.fill_between(x, lo, hi, color=col, alpha=0.13, lw=0, zorder=2)
             ax.plot(x, v, ls, color=col, lw=2, marker="o", ms=5, label=arm, zorder=3)
-        ax.set_xticks(x, ckpts)
+        ax.set_xticks(x, ckpts, rotation=45 if len(ckpts) > 7 else 0)
         ax.set_title(title, loc="left", fontsize=10, color=ink)
         ax.set_xlabel("checkpoint (generated tokens observed; end = last token)", color=muted, fontsize=9)
         ax.set_ylim(0.3, 1.0)
@@ -394,7 +399,7 @@ def main():
     preds = pd.concat(pd.read_parquet(p, columns=["layer", "seed"])
                       for p in glob.glob(os.path.join(out, "preds", "*.parquet"))
                       if not p.endswith(".perm.parquet"))
-    layers = sorted({int(v) for v in preds.layer.unique() if v != NO_LAYER}, key=lambda v: v != 20)
+    layers = sorted({int(v) for v in preds.layer.unique() if v != NO_LAYER}, key=lambda v: (v != 20, -v))
     seeds = sorted(preds.seed.unique())
     build(out, store, pop, popj["checkpoints"], layers, seeds, None)
 

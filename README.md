@@ -41,6 +41,7 @@ python tests/test_cache.py       # manifest and stale-reuse paths
 python tests/test_ablation.py    # yield table and TR vs TRH on planted signal
 python tests/test_positions.py   # --positions scoping and per-run output files
 python tests/test_recover.py     # recover.py logic, with torch/vLLM stubbed
+python tests/test_slip_scan.py   # injection gate 1: claim detection, skips, load-bearing flags
 ```
 
 `--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a
