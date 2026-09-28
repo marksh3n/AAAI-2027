@@ -39,13 +39,15 @@ UNITS = {"cm", "mm", "m", "km", "kg", "g", "mg", "lb", "lbs", "oz", "s", "sec", 
          "square", "cubic", "remainder", "r", "rem", "mod", "modulo", "times"}
 RIGHT_CMDS = {")", "]", "quad", "qquad", "implies", "Rightarrow", "Longrightarrow", "rightarrow",
               "to", "therefore", "\\", ",", ";"}
-LEFT_CMDS = {"\\quad", "\\qquad", "\\implies", "\\Rightarrow", "\\Longrightarrow", "\\rightarrow",
-             "\\therefore", "\\to"}
+# \implies and => before a claim make it a step derived from an equation, not a computation
+LEFT_CMDS = {"\\quad", "\\qquad", "\\therefore"}
+DERIVED = ("=>", "⇒", "->", "→")
 HYPOTHETICAL = {"if", "suppose", "assume", "assuming", "whether", "does"}
 APPROX = ("≈", "\\approx", "\\sim", "~", "≃", "\\simeq", "approx", "roughly", "around", "nearly",
           "almost", "estimat", "round", "floor", "ceil", "\\lfloor", "\\lceil")
 # modular, base-n and last-digit work: "3^4 = 1" is right mod 10. its header sits further back
-MODULAR = re.compile(r"\bmod\b|modulo|\\equiv|≡|\\pmod|\\bmod|remainder|\bdigits?\b|\bcycle|\bbase\b", re.I)
+MODULAR = re.compile(r"\bmod(?:\b|\s*\d)|modulo|\\equiv|≡|\\pmod|\\bmod|remainder|\bdigits?\b|\bcycle|"
+                     r"\bbase\b|\bbinary\b|\boctal\b|hexadecimal", re.I)
 SUPERSCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
 # a word after the written value that makes it a coefficient: "√3/2 = 3 sin(π/9)"
 MATH_WORDS = {"sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "sqrt", "pi", "arcsin",
@@ -147,6 +149,17 @@ def evaluate(expr):
     return v
 
 
+def grouped_reading(lhs):
+    # "a*b / c*d" read as (a*b)/(c*d), the way writers usually mean it; None when not that shape
+    if not re.search(r"/.*\*", lhs):
+        return None
+    i = lhs.index("/")
+    try:
+        return evaluate(lhs[:i]) / evaluate(lhs[i + 1:])
+    except (Skip, ZeroDivisionError):
+        return None
+
+
 def decimals(literal):
     m = re.search(r"\.(\d+)", literal)
     return len(m.group(1)) if m else 0
@@ -162,6 +175,8 @@ def left_context(text, start):
     c = before[-1]
     if before.endswith("**") and not before[:-2][-1:].isdigit():
         return None  # markdown bold, not 2**3
+    if before.endswith(DERIVED):
+        return "derivation step"
     if c == ":" and before[:-1][-1:].isdigit():
         return "clock time or ratio"
     if c == "[" and not before.endswith("\\["):
@@ -186,8 +201,8 @@ def left_context(text, start):
 
 
 def right_context(text, end):
-    if re.match(r"(?:,|\{,\}|\\,|\\ | )\d", text[end:end + 5]):
-        return "digit group"  # 23,375 or 1{,}024 or 1\,000 read as 23 / 1
+    if re.match(r"(?:,|\{,\}|\\,|\\ | )\d|, \d{3}(?!\d)", text[end:end + 6]):
+        return "digit group"  # 23,375 or 1{,}024 or 1\,000 or "600, 000" read as 23 / 1 / 600
     rest = text[end:end + 40]
     r = rest.lstrip(" \t")
     spaced = len(r) < len(rest)
@@ -213,8 +228,9 @@ def right_context(text, end):
         word = re.match(r"[^\W\d_]+", r).group(0).lower()
         if word in UNITS:
             return "unit"
-        if word in MATH_WORDS or (len(word) == 1 and word not in "ai"):
-            return "variable or function"
+        raw = re.match(r"[^\W\d_]+", r).group(0)
+        if word in MATH_WORDS or (len(word) == 1 and word not in "ai") or any(ch.isupper() for ch in raw):
+            return "variable or function"  # "= 2 QM^2": the written value is a coefficient
     return None
 
 
@@ -256,6 +272,8 @@ def find_claims(text):
                 elif (not d and true.denominator != 1 and written.denominator == 1
                       and written in (math.floor(true), math.ceil(true))):
                     raise Skip("integer part of a non-integer")
+                elif grouped_reading(normalize(lhs)) == written:
+                    raise Skip("ambiguous precedence")  # 5*4 /4*5 = 1 meant (5*4)/(4*5)
                 else:
                     rec["status"] = "slip"
                 rec["true"], rec["written"] = true, written
@@ -403,7 +421,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--go", type=int, default=30, help="load-bearing, uncorrected slips in wrong traces needed")
     ap.add_argument("--audit", type=int, default=100,
-                    help="random first-occurrence slips (half wrong, half correct traces) written to a CSV to label")
+                    help="random first-occurrence slips, one per trace, half from wrong and half from correct "
+                         "traces, written to a CSV to label")
+    ap.add_argument("--max-per-trace", type=int, default=3, help="cap on slips per trace in the detection pool")
     a = ap.parse_args()
     path = a.traces or f"data/traces_{a.tag}.jsonl"
     traces = [json.loads(line) for line in open(path)]
@@ -495,10 +515,24 @@ def main():
         for r in rows:
             f.write(json.dumps(r) + "\n")
     firsts = {k: [r for r in rows if r["first_occurrence"] and r["trace_label"] == k] for k in stats}
+
+    def pool(v):
+        # slip-detection candidates, capped per trace so one runaway table cannot dominate
+        per = Counter()
+        out = []
+        for r in v:
+            if r["controls"] and r["context"] == "main" and per[r["trace_id"]] < a.max_per_trace:
+                per[r["trace_id"]] += 1
+                out.append(r)
+        return out
+
     breakdown = {k: {"slip_type": dict(Counter(r["slip_type"] for r in v).most_common()),
                      "context": dict(Counter(r["context"] for r in v).most_common()),
                      "with_controls": sum(bool(r["controls"]) for r in v),
-                     "detection_pool": sum(bool(r["controls"]) and r["context"] == "main" for r in v)}
+                     "detection_pool": len(pool(v)),
+                     "detection_pool_traces": len({r["trace_id"] for r in pool(v)}),
+                     "detection_pool_problems": len({r["problem_id"] for r in pool(v)}),
+                     "max_slips_in_one_trace": max(Counter(r["trace_id"] for r in v).values(), default=0)}
                  for k, v in firsts.items()}
     summary = {"traces_file": path, "excluded": dict(excluded), "window_tokens": a.window,
                "token_offsets": tok is not None,
@@ -527,18 +561,26 @@ def main():
     for k in ("wrong", "correct"):
         b = breakdown[k]
         print(f"\n{k}: slip types {b['slip_type']}\n{'':>{len(k)}}  context {b['context']}; "
-              f"{b['with_controls']} with a matched correct claim, {b['detection_pool']} of them outside "
-              f"enumerations (the slip-detection pool)")
+              f"{b['with_controls']} with a matched correct claim; slip-detection pool (outside enumerations, "
+              f"<= {a.max_per_trace} per trace): {b['detection_pool']} slips from {b['detection_pool_traces']} "
+              f"traces / {b['detection_pool_problems']} problems; most slips in one trace: "
+              f"{b['max_slips_in_one_trace']}")
     if tok is not None:
         print(f"\nretokenization drift (offsets may not be the sampled tokens): "
               f"{stats['wrong']['non_canonical_traces']} wrong, {stats['correct']['non_canonical_traces']} correct traces")
     print(f"every evaluated claim, with char and token positions: {claims_path}")
 
     if a.audit:
+        # one slip per trace, so a runaway trace cannot fill the sheet
         rng = random.Random(a.seed + 1)
         half = a.audit // 2
-        pick = (rng.sample(firsts["wrong"], min(half, len(firsts["wrong"])))
-                + rng.sample(firsts["correct"], min(a.audit - half, len(firsts["correct"]))))
+        pick = []
+        for k, n_k in (("wrong", half), ("correct", a.audit - half)):
+            by_trace = {}
+            for r in firsts[k]:
+                by_trace.setdefault(r["trace_id"], []).append(r)
+            tids = rng.sample(sorted(by_trace), min(n_k, len(by_trace)))
+            pick += [rng.choice(by_trace[tid]) for tid in tids]
         audit_path = os.path.join(a.out_dir, f"audit_{a.tag}.csv")
         with open(audit_path, "w", newline="") as f:
             w = csv.writer(f)

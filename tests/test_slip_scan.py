@@ -35,6 +35,10 @@ for text, true, written in [
     ok = len(c) == 1 and c[0]["status"] == "slip" and c[0]["true"] == true and c[0]["written"] == written
     check(f"slip: {text}", ok, [(x["status"], x.get("true"), x.get("written")) for x in c])
 
+c = S.find_claims("so 6/2*3 = 4 here")
+check("a/b*c slip kept when the written value fits neither reading",
+      len(c) == 1 and c[0]["status"] == "slip" and c[0]["true"] == 9, [x["status"] for x in c])
+
 print("\n2. correct claims, rounding and truncation are not slips")
 for text in [r"Check: 7 \cdot 8 = 56.", "so 1/3 = 0.333 and", "and 2/3 = 0.67 so", r"\(6 \div 4 = 1.5\)",
              r"then \dfrac{1}{2} \cdot 4 = 2."]:
@@ -54,7 +58,15 @@ for text in ["then x + 3 + 4 = 7", "roughly 22/7 = 3.15", r"gives 5 \times 3 = 1
              # false alarms found in the first Colab run's 20 examples
              "So, 4x^3 - 3x + √3 / 2 = 0.", "Therefore, √3/2 = 3 sin(π/9) - 4 sin^3(π/9).",
              "3/148 is 3*277=831/43216.", "Simplify: 46/4 = 55 => 23 = 110 => which is not possible.",
-             "then 2 + 3 = 7 x"]:
+             "then 2 + 3 = 7 x",
+             # false alarms from the 100-row audit (#52, #81, #55, #66, #61, #45, #15)
+             "1000-813=187. 187 mod271=187. Next: 271*3=813, 1000-813=187 ⏎ 10^3=187 ⏎",
+             "check my modulus18 computation: 10^7 mod18=10, 10^6=10, 10^5=10",
+             "Take the binary number 10101001110 and double it, so 10101001110 *2=101010011100.",
+             "So, substituting: 34^2 + 34^2 = 2 QM^2 + 2*(16)^2",
+             "so the total=552960+46080=600, 000? Wait",
+             "the fraction is 5*4 /4*5=1, which is equal to 1",
+             "=> (402a)/(4a) = 57 => 402/4 = 57 => 201/2 = 57 => wrong", r"\implies 3 + 4 = 8"]:
     st = statuses(text)
     check(f"skip: {text}", all(s.startswith("skip:") for s in st), st)
 for text in ["then 2x + 3 = 7", "f(2) + 1 = 9", "3 + 4\n= 8"]:
@@ -157,6 +169,9 @@ with tempfile.TemporaryDirectory() as d:
         check("slip rows carry type, context and controls",
               {"slip_type", "context", "controls", "eq_char", "value_end_char", "eq_token"} <= set(out[0]), sorted(out[0]))
         cl = [json.loads(l) for l in open(os.path.join(d, "claims_T.jsonl"))]
+        check("summary reports the capped pool, its traces and the worst trace",
+              {"detection_pool", "detection_pool_traces", "detection_pool_problems", "max_slips_in_one_trace"} <= set(w)
+              and w["max_slips_in_one_trace"] == 1, w)
         check("claims file has every evaluated claim", [x["status"] for x in cl] == ["slip", "ok", "slip", "ok"],
               [x["status"] for x in cl])
         import csv
