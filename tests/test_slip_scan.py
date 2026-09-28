@@ -50,7 +50,11 @@ for text in ["then x + 3 + 4 = 7", "roughly 22/7 = 3.15", r"gives 5 \times 3 = 1
              r"so 3 \times 4 = 1,200", "and 125*187=23,375 total", r"so 2^{10} = 1{,}024", r"so 10^3 = 1\,000",
              "list:\n- 3 * 4 = 12", "1875 +1465=3340/18=1670/9", "2^3 = 1 (mod 7)",
              "the units digit cycles: 3^1 = 3, 3^2 = 9, 3^3 = 7, 3^4 = 1", "6 + 8 = 2(3 + 4)", "3 \\times 3 = 3²",
-             "from 1:45 + 30 = 2:15", "so 2**3 + 1 = 10", r"so \frac{1}{10000000}^{-64} = 1"]:
+             "from 1:45 + 30 = 2:15", "so 2**3 + 1 = 10", r"so \frac{1}{10000000}^{-64} = 1",
+             # false alarms found in the first Colab run's 20 examples
+             "So, 4x^3 - 3x + √3 / 2 = 0.", "Therefore, √3/2 = 3 sin(π/9) - 4 sin^3(π/9).",
+             "3/148 is 3*277=831/43216.", "Simplify: 46/4 = 55 => 23 = 110 => which is not possible.",
+             "then 2 + 3 = 7 x"]:
     st = statuses(text)
     check(f"skip: {text}", all(s.startswith("skip:") for s in st), st)
 for text in ["then 2x + 3 = 7", "f(2) + 1 = 9", "3 + 4\n= 8"]:
@@ -94,7 +98,31 @@ c = S.find_claims(t)
 a = S.annotate(c[0], t, len(t), None, [(c[1]["start"], c[1]["end"])])
 check("rewriting the same wrong claim is not reuse", a["written_reused_after"] == 0 and not a["load_bearing"], a)
 
-print("\n6. end to end, --no-tokens")
+print("\n6. slip type, context, controls, token positions")
+for true, written, want in [(7, 8, "off_by_one"), (132, 142, "single_digit"), (2100, 21, "magnitude"),
+                            (Fraction(21, 312500), Fraction(21, 3125), "magnitude"), (-2, 2, "sign"),
+                            (12, 21, "transposition"), (1024, 1000, "close"), (144, 121, "other")]:
+    got = S.slip_type(Fraction(true), Fraction(written))
+    check(f"slip_type({true}, {written}) = {want}", got == want, got)
+check("operator signature ignores a unary minus", S.ops_of("-3+5") == "+" and S.ops_of("3*4+5") == "*+")
+t = r"9007 ÷ 43 = 209.44, no. 9007 ÷ 47 = 191.6, no. 9007 ÷ 53 = 169.9, no. Then 12 \times 11 = 142."
+c = S.find_claims(t)
+S.tag_context(c)
+check("trial-division run tagged enumeration, the lone product main",
+      [x["context"] for x in c] == ["enumeration"] * 3 + ["main"], [(x["statement"], x["context"]) for x in c])
+t = r"So 12 \times 11 = 142. Also 13 \times 10 = 130. And 2 + 2 = 4. Then 3 \times 1000 = 3000."
+c = S.find_claims(t)
+ctl = S.match_controls(c[0], c)
+check("controls: same operators, value within 10x, correct only",
+      [x["statement"] for x in ctl] == [r"13 \times 10 = 130"], [x["statement"] for x in ctl])
+# tokens "So", " ", "12", " \times", " 11", " =", " 142", "." -> end offsets
+ends = [2, 3, 5, 12, 15, 17, 21, 22]
+p = S.positions(c[0], ends)
+check("token positions of claim start, '=' and last written digit",
+      (p["token_offset"], p["eq_token"], p["value_end_token"]) == (2, 5, 6), p)
+check("no tokenizer -> positions None", S.positions(c[0], None)["eq_token"] is None)
+
+print("\n7. end to end, --no-tokens")
 with tempfile.TemporaryDirectory() as d:
     rows = [
         {"trace_id": "1_0", "problem_id": 1, "level": 5, "trunc": False, "n_gen": 900, "is_correct": False,
@@ -126,6 +154,15 @@ with tempfile.TemporaryDirectory() as d:
         check("both occurrences written, first flagged", [o["first_occurrence"] for o in out] == [True, False], out)
         check("char offset points at the statement", rows[0]["text"][out[0]["char_offset"]:].startswith("12 \\times 11"))
         check("go/no-go line printed", "GO, pending the precision check" in r.stdout, r.stdout[-400:])
+        check("slip rows carry type, context and controls",
+              {"slip_type", "context", "controls", "eq_char", "value_end_char", "eq_token"} <= set(out[0]), sorted(out[0]))
+        cl = [json.loads(l) for l in open(os.path.join(d, "claims_T.jsonl"))]
+        check("claims file has every evaluated claim", [x["status"] for x in cl] == ["slip", "ok", "slip", "ok"],
+              [x["status"] for x in cl])
+        import csv
+        au = list(csv.DictReader(open(os.path.join(d, "audit_T.csv"))))
+        check("audit sheet: one row per first-occurrence slip, blank label column",
+              len(au) == 1 and au[0]["real (y/n)"] == "" and "12 \\times 11" in au[0]["statement"], au)
 
 print()
 if fails:

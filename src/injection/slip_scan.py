@@ -3,9 +3,12 @@
 # precision over recall: anything that might be a variable, an approximation, a unit, a
 # remainder or a set is skipped, never counted. the pilot is worth building only if wrong
 # traces hold enough load-bearing, uncorrected slips.
+# outputs in data/injection: slips_<tag>.jsonl (each slip with type, context, matched correct
+# claims from the same trace and token positions of the claim, its "=" and its written value),
+# claims_<tag>.jsonl (every evaluated claim), audit_<tag>.csv (slips to label by hand), a summary.
 #   python src/injection/slip_scan.py                 # token offsets need transformers (Colab)
 #   python src/injection/slip_scan.py --no-tokens     # char offsets only, window ~4 chars/token
-import argparse, bisect, json, math, os, random, re
+import argparse, bisect, csv, json, math, os, random, re
 from collections import Counter
 from fractions import Fraction
 
@@ -44,6 +47,12 @@ APPROX = ("≈", "\\approx", "\\sim", "~", "≃", "\\simeq", "approx", "roughly"
 # modular, base-n and last-digit work: "3^4 = 1" is right mod 10. its header sits further back
 MODULAR = re.compile(r"\bmod\b|modulo|\\equiv|≡|\\pmod|\\bmod|remainder|\bdigits?\b|\bcycle|\bbase\b", re.I)
 SUPERSCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+# a word after the written value that makes it a coefficient: "√3/2 = 3 sin(π/9)"
+MATH_WORDS = {"sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "sqrt", "pi", "arcsin",
+              "arccos", "arctan", "sinh", "cosh", "tanh"}
+# a derivation ending in a contradiction states falsehoods on purpose: "=> 23/2 = 55 => not possible"
+REDUCTIO = re.compile(r"not possible|impossible|contradict|can't be|cannot be|which is false|not true|"
+                      r"doesn't hold|does not hold|absurd", re.I)
 CUE = re.compile(r"\b(wait|no,|mistake|actually|miscalculat\w*|recalculat\w*|recompute|correction|"
                  r"oops|incorrect|that's wrong|not right)", re.I)
 MAX_EXP, MAX_DIGITS = 64, 60
@@ -159,7 +168,7 @@ def left_context(text, start):
         return "interval"
     if c == "{" and before[:-1].rstrip().endswith(("^", "_")):
         return "exponent or subscript"
-    if c.isdigit() or c in "_^]}|+-−*/×·÷":
+    if c.isdigit() or c in "_^]}|+-−*/×·÷√∛∜":
         return "expression continues left"
     if c in ".,)!'" and j == start:
         return "expression continues left"  # 1,000 or 2.5 or f(2)+1; "Wait, 3+4" is fine
@@ -201,8 +210,11 @@ def right_context(text, end):
     if c.isalpha():
         if not spaced:
             return "unit or variable"
-        if re.match(r"[^\W\d_]+", r).group(0).lower() in UNITS:
+        word = re.match(r"[^\W\d_]+", r).group(0).lower()
+        if word in UNITS:
             return "unit"
+        if word in MATH_WORDS or (len(word) == 1 and word not in "ai"):
+            return "variable or function"
     return None
 
 
@@ -214,6 +226,8 @@ def approx_context(text, start, end, written_literal):
         return "approximation"
     if MODULAR.search(text[max(0, start - 300):end + 40]):
         return "modular, base or digit context"
+    if REDUCTIO.search(text[end:end + 150]):
+        return "contradiction or hypothetical"
     return None
 
 
@@ -223,14 +237,16 @@ def find_claims(text):
     for m in CLAIM.finditer(text):
         start, end = m.start(), m.end()
         lhs, rhs = m.group("lhs"), m.group("rhs")
-        rec = {"start": start, "end": end, "statement": m.group(0), "lhs": normalize(lhs),
-               "written_literal": rhs.strip()}
+        rec = {"start": start, "end": end, "eq": text.index("=", m.end("lhs")), "statement": m.group(0),
+               "lhs": normalize(lhs), "ops": ops_of(normalize(lhs)), "written_literal": rhs.strip()}
         reason = (left_context(text, start) or right_context(text, end)
                   or approx_context(text, start, end, rhs))
         div = re.fullmatch(rf"[-−]?{SP}(\d+){SP}/{SP}(\d+)", rhs.strip())
         if reason is None and div and (re.match(rf"{SP}=", text[end:]) or
                                        math.gcd(int(div.group(1)), int(div.group(2))) > 1):
             reason = "written value is a division"  # 3340/18 = 1670/9: a step, not a value
+        if reason is None and div and not re.search(r"/|\\[dt]?frac|\\div|÷", lhs):
+            reason = "fraction written for a non-division"  # 3*277 = 831/43216: a numerator
         if reason is None:
             try:
                 true, written = evaluate(normalize(lhs)), evaluate(normalize(rhs))
@@ -249,6 +265,73 @@ def find_claims(text):
             rec["status"] = f"skip:{reason}"
         out.append(rec)
     return out
+
+
+def ops_of(lhs):
+    # operator signature of a normalised left side, unary minus dropped: "3*4+5" -> "*+"
+    return "".join(sorted(set(re.sub(r"(^|[-+*/^(])-", r"\1", lhs)) & set("+-*/^")))
+
+
+def slip_type(true, written):
+    if written == -true:
+        return "sign"
+    if true and written:
+        r = abs(written / true)
+        k = round(math.log10(float(r)))
+        if k and r == Fraction(10) ** k:
+            return "magnitude"  # a decimal place or a power of ten
+    if true.denominator == 1 and written.denominator == 1:
+        a, b = str(abs(true.numerator)), str(abs(written.numerator))
+        if abs(true - written) == 1:
+            return "off_by_one"
+        if len(a) == len(b):
+            if sum(x != y for x, y in zip(a, b)) == 1:
+                return "single_digit"
+            if sorted(a) == sorted(b):
+                return "transposition"
+    if true and abs(true - written) / abs(true) <= Fraction(1, 20):
+        return "close"
+    return "other"
+
+
+def first_operand(lhs):
+    m = re.match(r"\(*-?(\d+(?:\.\d+)?)", lhs)
+    return m.group(1) if m else None
+
+
+def tag_context(claims, radius=600):
+    # "enumeration": the same first operand and operators recur nearby, as in trial division
+    # ("9007 ÷ 43 = ..., 9007 ÷ 47 = ..."), where each value is discarded right away
+    keys = [(first_operand(c["lhs"]), c["ops"]) for c in claims]
+    for i, c in enumerate(claims):
+        near = sum(1 for j, d in enumerate(claims)
+                   if j != i and keys[j] == keys[i] and abs(d["start"] - c["start"]) <= radius)
+        c["context"] = "enumeration" if near >= 2 else "main"
+
+
+def match_controls(slip, claims, k=3):
+    # correct claims of the same trace with the same operators and a value within 10x, nearest first
+    mag = lambda v: math.log10(max(abs(float(v)), 1e-12))
+    pool = [c for c in claims if c["status"] == "ok" and c["ops"] == slip["ops"]
+            and abs(mag(c["true"]) - mag(slip["true"])) <= 1]
+    return sorted(pool, key=lambda c: abs(c["start"] - slip["start"]))[:k]
+
+
+def tok_at(ends, char):
+    # index of the token holding char; ends[i] is token i's end offset
+    return min(bisect.bisect_right(ends, char), len(ends) - 1)
+
+
+def positions(c, ends):
+    # the claim's first token, the "=" token, and the last token of the written value
+    if not ends:
+        return {"token_offset": None, "eq_token": None, "value_end_token": None}
+    return {"token_offset": tok_at(ends, c["start"]), "eq_token": tok_at(ends, c["eq"]),
+            "value_end_token": tok_at(ends, c["end"] - 1)}
+
+
+def clean(s):
+    return s.replace("\r", " ").replace("\n", " ⏎ ")
 
 
 def forms(v):
@@ -319,9 +402,12 @@ def main():
     ap.add_argument("--examples", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--go", type=int, default=30, help="load-bearing, uncorrected slips in wrong traces needed")
+    ap.add_argument("--audit", type=int, default=100,
+                    help="random first-occurrence slips (half wrong, half correct traces) written to a CSV to label")
     a = ap.parse_args()
     path = a.traces or f"data/traces_{a.tag}.jsonl"
     traces = [json.loads(line) for line in open(path)]
+    by_id = {t["trace_id"]: t["text"] for t in traces}
     tok = None
     if not a.no_tokens:
         from transformers import AutoTokenizer
@@ -329,10 +415,12 @@ def main():
 
     os.makedirs(a.out_dir, exist_ok=True)
     out_path = os.path.join(a.out_dir, f"slips_{a.tag}.jsonl")
+    claims_path = os.path.join(a.out_dir, f"claims_{a.tag}.jsonl")
     stats = {k: Counter() for k in ("wrong", "correct")}
     skips = {k: Counter() for k in ("wrong", "correct")}
     excluded = Counter()
     rows = []
+    cf = open(claims_path, "w")
     for t in traces:
         if t["trunc"] or t["n_gen"] >= MAX_NEW:
             excluded["truncated"] += 1
@@ -345,8 +433,16 @@ def main():
         label = "correct" if t["is_correct"] else "wrong"
         st = stats[label]
         st["traces"] += 1
-        offsets, seen, had = None, set(), False
+        ends, canonical = None, None
+        if tok is not None:
+            enc = tok(text, add_special_tokens=False, return_offsets_mapping=True)
+            ends = [b for _, b in enc["offset_mapping"]]
+            # vLLM counts the EOS: any other length means retokenizing drifted from the sample
+            canonical = t["n_gen"] == len(enc["input_ids"]) + 1
+            st["non_canonical_traces"] += not canonical
+        seen, had = set(), False
         claims = find_claims(text[:cut])
+        tag_context(claims)
         spans = {}
         for c in claims:
             if c["status"] == "slip":
@@ -356,23 +452,29 @@ def main():
                 skips[label][c["status"][5:]] += 1
                 continue
             st["claims"] += 1
+            pos = positions(c, ends)
+            where = {"char_offset": c["start"], "eq_char": c["eq"], "value_end_char": c["end"] - 1, **pos}
+            cf.write(json.dumps({"trace_id": t["trace_id"], "problem_id": t["problem_id"], "trace_label": label,
+                                 "status": c["status"], **where, "statement": c["statement"], "ops": c["ops"],
+                                 "true_value": fmt(c["true"]), "written_value": fmt(c["written"]),
+                                 "context": c["context"], "canonical": canonical}) + "\n")
             if c["status"] != "slip":
                 continue
-            if tok is not None and offsets is None:
-                offsets = tok(text, add_special_tokens=False, return_offsets_mapping=True)["offset_mapping"]
-                ends = [b for _, b in offsets]
-            if offsets is not None:
-                k0, k1 = bisect.bisect_right(ends, c["start"]), bisect.bisect_left(ends, c["end"])
-                window_end = ends[min(k1 + a.window, len(ends) - 1)]
+            if ends:
+                window_end = ends[min(bisect.bisect_left(ends, c["end"]) + a.window, len(ends) - 1)]
             else:
-                k0, window_end = None, c["end"] + 4 * a.window
+                window_end = c["end"] + 4 * a.window
             key = (c["lhs"], fmt(c["written"]))
             first = key not in seen
             seen.add(key)
+            controls = [{"char_offset": d["start"], "eq_char": d["eq"], "value_end_char": d["end"] - 1,
+                         **positions(d, ends), "statement": d["statement"], "true_value": fmt(d["true"]),
+                         "context": d["context"]} for d in match_controls(c, claims)]
             row = {"trace_id": t["trace_id"], "problem_id": t["problem_id"], "level": t.get("level"),
-                   "trace_label": label, "char_offset": c["start"], "token_offset": k0,
-                   "window": f"{a.window} tokens" if offsets is not None else f"{4 * a.window} chars (~{a.window} tokens)",
-                   "first_occurrence": first,
+                   "trace_label": label, **where, "canonical": canonical,
+                   "window": f"{a.window} tokens" if ends else f"{4 * a.window} chars (~{a.window} tokens)",
+                   "slip_type": slip_type(c["true"], c["written"]), "context": c["context"],
+                   "first_occurrence": first, "controls": controls,
                    **annotate(c, text, window_end, t.get("answer"),
                               [s for s in spans[key] if s != (c["start"], c["end"])])}
             rows.append(row)
@@ -387,14 +489,21 @@ def main():
             else:
                 st["repeats"] += 1
         st["traces_with_slip"] += had
+    cf.close()
 
     with open(out_path, "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
+    firsts = {k: [r for r in rows if r["first_occurrence"] and r["trace_label"] == k] for k in stats}
+    breakdown = {k: {"slip_type": dict(Counter(r["slip_type"] for r in v).most_common()),
+                     "context": dict(Counter(r["context"] for r in v).most_common()),
+                     "with_controls": sum(bool(r["controls"]) for r in v),
+                     "detection_pool": sum(bool(r["controls"]) and r["context"] == "main" for r in v)}
+                 for k, v in firsts.items()}
     summary = {"traces_file": path, "excluded": dict(excluded), "window_tokens": a.window,
                "token_offsets": tok is not None,
                "by_label": {k: {**dict(v), "per_1k_claims": round(1000 * v["slips"] / v["claims"], 2)
-                                if v["claims"] else None, "skipped": dict(skips[k].most_common())}
+                                if v["claims"] else None, **breakdown[k], "skipped": dict(skips[k].most_common())}
                             for k, v in stats.items()}}
     json.dump(summary, open(os.path.join(a.out_dir, f"slip_summary_{a.tag}.json"), "w"), indent=2)
 
@@ -415,17 +524,43 @@ def main():
     n = stats["wrong"]["load_bearing_uncorrected"]
     print(f"\ngo/no-go (before your manual precision check): {n} load-bearing, uncorrected slips in wrong "
           f"traces vs {a.go} needed -> {'GO, pending the precision check' if n >= a.go else 'NO-GO'}")
+    for k in ("wrong", "correct"):
+        b = breakdown[k]
+        print(f"\n{k}: slip types {b['slip_type']}\n{'':>{len(k)}}  context {b['context']}; "
+              f"{b['with_controls']} with a matched correct claim, {b['detection_pool']} of them outside "
+              f"enumerations (the slip-detection pool)")
+    if tok is not None:
+        print(f"\nretokenization drift (offsets may not be the sampled tokens): "
+              f"{stats['wrong']['non_canonical_traces']} wrong, {stats['correct']['non_canonical_traces']} correct traces")
+    print(f"every evaluated claim, with char and token positions: {claims_path}")
 
-    pool = [r for r in rows if r["trace_label"] == "wrong" and r["first_occurrence"]]
-    by_id = {t["trace_id"]: t["text"] for t in traces}
+    if a.audit:
+        rng = random.Random(a.seed + 1)
+        half = a.audit // 2
+        pick = (rng.sample(firsts["wrong"], min(half, len(firsts["wrong"])))
+                + rng.sample(firsts["correct"], min(a.audit - half, len(firsts["correct"]))))
+        audit_path = os.path.join(a.out_dir, f"audit_{a.tag}.csv")
+        with open(audit_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["audit_id", "trace_id", "trace_label", "slip_type", "context", "statement", "true_value",
+                        "written_value", "before", "after", "real (y/n)", "notes"])
+            for i, r in enumerate(pick):
+                text, s = by_id[r["trace_id"]], r["char_offset"]
+                e = s + len(r["statement"])
+                w.writerow([i, r["trace_id"], r["trace_label"], r["slip_type"], r["context"], r["statement"],
+                            r["true_value"], r["written_value"], clean(text[max(0, s - 200):s]),
+                            clean(text[e:e + 200]), "", ""])
+        print(f"{len(pick)} slips to label by hand (fill 'real (y/n)'): {audit_path}")
+
+    pool = firsts["wrong"]
     print(f"\n{min(a.examples, len(pool))} random wrong-trace slips (seed {a.seed}); all in {out_path}\n")
     for r in random.Random(a.seed).sample(pool, min(a.examples, len(pool))):
         text, s = by_id[r["trace_id"]], r["char_offset"]
         e = s + len(r["statement"])
-        ctx = (text[max(0, s - 120):s] + " >>>" + text[s:e] + "<<< " + text[e:e + 120]).replace("\n", " ⏎ ")
+        ctx = clean(text[max(0, s - 120):s] + " >>>" + text[s:e] + "<<< " + text[e:e + 120])
         print(f"[{r['trace_id']} @ char {s}, token {r['token_offset']}] true {r['true_value']}, written "
-              f"{r['written_value']} | load-bearing {r['load_bearing']}, self-corrected {r['self_corrected']}, "
-              f"cue {r['correction_cue']}\n    {ctx}\n")
+              f"{r['written_value']} | {r['slip_type']}, {r['context']} | load-bearing {r['load_bearing']}, "
+              f"self-corrected {r['self_corrected']}, cue {r['correction_cue']}\n    {ctx}\n")
 
 
 if __name__ == "__main__":
