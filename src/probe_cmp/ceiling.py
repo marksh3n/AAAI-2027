@@ -121,7 +121,7 @@ def compare(sub, preds, n_boot=N_BOOT):
     ids, y, g = sub.trace_id.values, sub.y.values, sub.problem_id.values
     pairs = S.Pairs(y, g)
     draws = S.problem_draws(len(pairs.pids), n_boot, seed=0)
-    scores = {"ceiling r_hat": 1 - sub.r.values, "ceiling r_finished": 1 - sub.r_finished.values}
+    scores = {"r_hat": 1 - sub.r.values, "r_hat finished": 1 - sub.r_finished.values}
     if "restarts" in sub:
         scores["restart density (raw)"] = sub.restarts.values.astype(float)  # more restarts -> P(wrong)
     for arm, layer in ARMS:
@@ -143,13 +143,13 @@ def compare(sub, preds, n_boot=N_BOOT):
         rows.append({"score": name, "auroc": w["weighted"], "ci_low": S.ci(bw)[0], "ci_high": S.ci(bw)[1],
                      "n_traces": len(sub), "n_problems": w["n_problems"], "n_pairs": w["n_pairs"]})
     out = pd.DataFrame(rows)
-    ref = boots["ceiling r_hat"]
+    ref = boots["r_hat"]
     d = [(r.score, r.auroc) for r in out.itertuples()]
-    base = out.set_index("score").auroc["ceiling r_hat"]
-    out["delta_ceiling_minus"] = [base - v for _, v in d]
+    base = out.set_index("score").auroc["r_hat"]
+    out["delta_r_hat_minus"] = [base - v for _, v in d]
     out["delta_ci_low"] = [S.ci(ref - boots[n])[0] for n, _ in d]
     out["delta_ci_high"] = [S.ci(ref - boots[n])[1] for n, _ in d]
-    out["delta_p"] = [S.boot_p(ref - boots[n]) if n != "ceiling r_hat" else np.nan for n, _ in d]
+    out["delta_p"] = [S.boot_p(ref - boots[n]) if n != "r_hat" else np.nan for n, _ in d]
     # tied pairs under r_hat: how much K=8 discreteness caps the ceiling
     dd = (1 - sub.r.values)[pairs.wrong] - (1 - sub.r.values)[pairs.correct]
     return out, float((dd == 0).mean()) if len(dd) else np.nan
@@ -289,7 +289,7 @@ def run(roll, traces, preds_dir, out, drift=None, meta=None, n_boot=N_BOOT, log=
              "checkpoint, so deltas are paired.",
              "- The true recovery probability r(t) is the theoretical ceiling. r_hat is its estimate from K "
              "sampled continuations; ties and binomial noise pull its AUROC toward 0.5, so it understates "
-             "the ceiling. `r_finished` drops truncated continuations from the denominator.",
+             "the ceiling. `r_hat finished` drops truncated continuations from the denominator.",
              "- `restart density (raw)` is the unfitted rate of 'wait / hold on / let me re- / actually' per "
              "1000 tokens of the cut (taxonomy.RESTART), a self-correction proxy; higher = P(wrong).",
              "- The 'before the answer' variants keep only cuts that do not yet hold the answer; each "
@@ -298,10 +298,10 @@ def run(roll, traces, preds_dir, out, drift=None, meta=None, n_boot=N_BOOT, log=
              "AUROC is 0.5 by construction.\n"]
     for vname, g in allr.groupby("variant", sort=False):
         lines.append(f"## {vname}\n")
-        lines.append("| checkpoint | score | AUROC [95% CI] | ceiling − score [95% CI] | p | traces / problems / pairs |")
+        lines.append("| checkpoint | score | AUROC [95% CI] | r_hat − score [95% CI] | p | traces / problems / pairs |")
         lines.append("|---|---|---|---|---|---|")
         for r in g.itertuples():
-            delta = "–" if r.score == "ceiling r_hat" else f(r.delta_ceiling_minus, r.delta_ci_low, r.delta_ci_high, True)
+            delta = "–" if r.score == "r_hat" else f(r.delta_r_hat_minus, r.delta_ci_low, r.delta_ci_high, True)
             p = "–" if np.isnan(r.delta_p) else f"{r.delta_p:.3f}"
             lines.append(f"| {r.checkpoint} | {r.score} | {f(r.auroc, r.ci_low, r.ci_high)} | {delta} | {p} "
                          f"| {r.n_traces} / {r.n_problems} / {r.n_pairs} |")

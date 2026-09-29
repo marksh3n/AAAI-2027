@@ -88,11 +88,11 @@ out = os.path.join(d, "out")
 allr, desc = C.run(roll, tr, pd_dir, out, drift={"0_0", "0_1"}, meta=C.load_meta(mp), n_boot=200,
                    log=lambda *_: None)
 a = allr[allr.variant == "all traces"].set_index(["checkpoint", "score"])
-check("ceiling separates every pair -> AUROC 1", np.isclose(a.loc[("512", "ceiling r_hat"), "auroc"], 1.0))
+check("ceiling separates every pair -> AUROC 1", np.isclose(a.loc[("512", "r_hat"), "auroc"], 1.0))
 check("noise probe near chance", 0.25 < a.loc[("512", "lr/raw L20"), "auroc"] < 0.75, a.loc[("512", "lr/raw L20"), "auroc"])
-check("a probe equal to the labels ties the ceiling", np.isclose(a.loc[("512", "len"), "delta_ceiling_minus"], 0.0))
+check("a probe equal to the labels ties the ceiling", np.isclose(a.loc[("512", "len"), "delta_r_hat_minus"], 0.0))
 check("ceiling - noise probe positive, CI above 0",
-      a.loc[("512", "lr/raw L20"), "delta_ceiling_minus"] > 0 and a.loc[("512", "lr/raw L20"), "delta_ci_low"] > 0)
+      a.loc[("512", "lr/raw L20"), "delta_r_hat_minus"] > 0 and a.loc[("512", "lr/raw L20"), "delta_ci_low"] > 0)
 check("identical traces: 48 traces, 12 problems, 48 pairs at every checkpoint",
       set(zip(a.n_traces, a.n_problems, a.n_pairs)) == {(48, 12, 48)}, set(zip(a.n_traces, a.n_problems, a.n_pairs)))
 v = allr[allr.variant.str.startswith("without")]
@@ -111,11 +111,11 @@ check("committed cuts: half the right attempts at 4096, none earlier",
       and dsc.loc[("p2048", "correct"), "cuts committed"] == 0, dsc["cuts committed"].to_dict())
 b = allr[allr.variant.str.startswith("before the answer is committed")].set_index(["checkpoint", "score"])
 check("before-commit variant drops the 12 boxed cuts at 4096 only",
-      b.loc[("4096", "ceiling r_hat"), "n_traces"] == 36 and b.loc[("512", "ceiling r_hat"), "n_traces"] == 48,
-      (b.loc[("4096", "ceiling r_hat"), "n_traces"], b.loc[("512", "ceiling r_hat"), "n_traces"]))
+      b.loc[("4096", "r_hat"), "n_traces"] == 36 and b.loc[("512", "r_hat"), "n_traces"] == 48,
+      (b.loc[("4096", "r_hat"), "n_traces"], b.loc[("512", "r_hat"), "n_traces"]))
 w = allr[allr.variant.str.startswith("before the answer value")].set_index(["checkpoint", "score"])
 check("value-written variant also drops the 2048 cut that states 7",
-      w.loc[("2048", "ceiling r_hat"), "n_traces"] == 47, w.loc[("2048", "ceiling r_hat"), "n_traces"])
+      w.loc[("2048", "r_hat"), "n_traces"] == 47, w.loc[("2048", "r_hat"), "n_traces"])
 check("raw restart count scored on the same pairs",
       np.isclose(a.loc[("512", "restart density (raw)"), "auroc"], 1.0))
 check("recovery curves written", os.path.exists(os.path.join(out, "recovery_curves.csv"))
