@@ -1,11 +1,14 @@
-# r(t) ceiling next to the probes, on identical traces. r_hat = share of the K continuations from a
-# prefix that end correct. its within-problem AUROC against the trace's own outcome (score
-# 1 - r_hat = P(wrong)) is the best a prefix-only predictor can do under the model's own sampling.
-# read it as a lower bound: with K=8, ties and binomial noise pull it toward 0.5.
-# every AUROC here uses probe_cmp's own stats (pair-weighted, problem-clustered bootstrap, draws
-# shared by all arms at a checkpoint, so every ceiling - probe delta is paired).
-#   python src/probe_cmp/ceiling.py --rollouts <rollouts.jsonl> --preds <probe_cmp out>/preds --out <dir>
-import argparse, json, os
+# recoverability next to the probes, on identical traces. r(t) = P(final answer correct | prefix)
+# under the model's own sampling; the true r(t) is the theoretical ceiling for any prefix-only
+# predictor. r_hat, the share of K sampled continuations that end correct, is only a noisy
+# estimate of it: with K=8, ties and binomial noise pull its AUROC toward 0.5.
+# also: answer agreement (continuations reaching the source trace's own final answer), whether each
+# cut already holds the answer (from meta's stored prefix text), and a raw restart-count baseline.
+# every AUROC uses probe_cmp's own stats (pair-weighted, problem-clustered bootstrap, draws shared
+# by all scores at a checkpoint, so every r_hat - probe delta is paired).
+#   python src/probe_cmp/ceiling.py --rollouts <rollouts.jsonl> --preds <probe_cmp out>/preds \
+#       --meta data/meta_B.parquet --out <dir>
+import argparse, json, os, re
 import numpy as np
 import pandas as pd
 
@@ -36,10 +39,13 @@ def load_rollouts(path):
     rows = {}
     for (pid, _, _), (r, s) in last.items():
         d = rows.setdefault(pid, {"prefix_id": pid, "problem_id": r["problem_id"], "trace_id": r["trace_id"],
-                                  "checkpoint": r["checkpoint"], "n": 0, "k": 0, "n_trunc": 0})
+                                  "checkpoint": r["checkpoint"], "n": 0, "k": 0, "n_trunc": 0,
+                                  "n_from_prefix": 0, "answers": []})
         d["n"] += 1
         d["k"] += bool(s["correct"])
         d["n_trunc"] += bool(s["truncated"])
+        d["n_from_prefix"] += bool(s.get("answer_from_prefix"))
+        d["answers"].append(s.get("answer"))
     df = pd.DataFrame(list(rows.values()))
     df["r"] = df.k / df.n
     # truncated continuations are never correct; this drops them from the denominator instead
@@ -51,6 +57,47 @@ def load_traces(path):
     t = pd.DataFrame(json.loads(line) for line in open(path)).set_index("trace_id", drop=False)
     t["y"] = (~t.is_correct.astype(bool)).astype(int)  # 1 = wrong, as in probe_cmp
     return t
+
+
+def norm(a):
+    a = re.sub(r"\\(left|right|!|,|;|:)|\s", "", str(a)).replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
+    return a.rstrip(".").strip("$")
+
+
+_SAME = {}
+
+
+def same(a, b):
+    # answer equivalence as the rollouts were scored (math_verify), string fallback without it
+    if a is None or b is None:
+        return False
+    if (a, b) not in _SAME:
+        try:
+            from math_verify import parse, verify
+            _SAME[(a, b)] = norm(a) == norm(b) or bool(verify(parse("$" + b + "$"), parse("$" + a + "$")))
+        except Exception:
+            _SAME[(a, b)] = norm(a) == norm(b)
+    return _SAME[(a, b)]
+
+
+def answer_flags(prefix, answer):
+    # committed: the cut already holds the end of thinking or a boxed answer. written: the final
+    # answer's value already appears in the prefix as a standalone token (over-flags short numbers)
+    committed = "</think>" in prefix or "\\boxed" in prefix
+    written = False
+    if answer is not None and norm(answer):
+        # keep the prefix's spaces (they are the word boundaries); a trailing period is punctuation,
+        # but "5" inside 15, 7.5 or 5.2 is not the answer
+        text = re.sub(r"\\(left|right)", "", prefix).replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
+        a = re.escape(norm(answer))
+        written = bool(re.search(rf"(?<![\w.]){a}(?!\w|\.\d)", text))
+    return committed, committed or written
+
+
+def load_meta(path):
+    m = pd.read_parquet(path, columns=["trace_id", "pos", "prefix", "restarts"])
+    m["pos"] = m.pos.astype(int)
+    return m.set_index(["trace_id", "pos"])
 
 
 def drift_ids(traces, ids):
@@ -75,6 +122,8 @@ def compare(sub, preds, n_boot=N_BOOT):
     pairs = S.Pairs(y, g)
     draws = S.problem_draws(len(pairs.pids), n_boot, seed=0)
     scores = {"ceiling r_hat": 1 - sub.r.values, "ceiling r_finished": 1 - sub.r_finished.values}
+    if "restarts" in sub:
+        scores["restart density (raw)"] = sub.restarts.values.astype(float)  # more restarts -> P(wrong)
     for arm, layer in ARMS:
         a = preds[(preds.arm == arm) & (preds.layer == layer)].set_index("trace_id")
         if not len(a):
@@ -112,18 +161,87 @@ def describe(r, traces):
     for c, g in r.groupby("checkpoint"):
         lab = np.where(g.trace_id.isna(), "t0", np.where(g.y == 1, "wrong", "correct"))
         for name, h in g.groupby(lab):
-            rows.append({"checkpoint": c, "source trace": name, "prefixes": len(h), "mean r": h.r.mean(),
-                         "r = 0": (h.r == 0).mean(), "r = 1": (h.r == 1).mean(),
-                         "truncated share": h.n_trunc.sum() / h.n.sum()})
+            row = {"checkpoint": c, "source trace": name, "prefixes": len(h), "mean r": h.r.mean(),
+                   "r = 0": (h.r == 0).mean(), "r = 1": (h.r == 1).mean(),
+                   "mean agreement": h.agree.mean() if "agree" in h else np.nan,
+                   "answer boxed in prefix": h.n_from_prefix.sum() / h.n.sum(),
+                   "truncated share": h.n_trunc.sum() / h.n.sum()}
+            if "committed" in h:
+                row["cuts committed"] = h.committed.mean()
+                row["cuts with answer written"] = h.written.mean()
+            rows.append(row)
     return pd.DataFrame(rows)
 
 
-def run(roll, traces, preds_dir, out, drift=None, n_boot=N_BOOT, log=print):
+def curves(roll, out, n_boot=1000):
+    # mean r_hat and answer agreement per checkpoint and source outcome, CIs over problems.
+    # t0 has no source trace: it is drawn at the start of both lines.
+    order = ["t0"] + list(CKPTS)
+    rows = []
+    rng = np.random.default_rng(0)
+    for src in ("correct", "wrong"):
+        for c in order:
+            g = roll[roll.checkpoint == c] if c == "t0" else roll[(roll.checkpoint == c) & (roll.y == (src == "wrong"))]
+            for col in ("r", "agree"):
+                if c == "t0" and col == "agree":
+                    continue
+                pm = g.groupby("problem_id")[col].mean().dropna().values
+                if not len(pm):
+                    continue
+                b = rng.choice(pm, (n_boot, len(pm))).mean(1)
+                rows.append({"source": src, "checkpoint": c, "measure": col, "mean": pm.mean(),
+                             "ci_low": np.percentile(b, 2.5), "ci_high": np.percentile(b, 97.5), "problems": len(pm)})
+    cv = pd.DataFrame(rows)
+    cv.to_csv(os.path.join(out, "recovery_curves.csv"), index=False)
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return cv
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), dpi=150, sharey=True)
+    color = {"correct": "#0e6b66", "wrong": "#b4541f"}
+    for ax, (col, title) in zip(axes, [("r", "recoverability: share of continuations correct (r_hat)"),
+                                       ("agree", "answer agreement with the source trace")]):
+        for src in ("correct", "wrong"):
+            g = cv[(cv.source == src) & (cv.measure == col)].set_index("checkpoint").reindex(order)
+            x = np.arange(len(order))
+            ax.fill_between(x, g.ci_low, g.ci_high, color=color[src], alpha=0.15, lw=0)
+            ax.plot(x, g["mean"], "-o", color=color[src], lw=2, ms=4, label=f"source trace ended {src}")
+        ax.set_xticks(np.arange(len(order)), ["start"] + [CKPTS[c] for c in CKPTS])
+        ax.set_xlabel("tokens of the source trace kept")
+        ax.set_title(title, fontsize=10, loc="left")
+        ax.set_ylim(0, 1)
+        ax.grid(axis="y", alpha=0.3)
+    axes[0].legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out, "recovery_curves.png"), bbox_inches="tight")
+    plt.close(fig)
+    return cv
+
+
+def run(roll, traces, preds_dir, out, drift=None, meta=None, n_boot=N_BOOT, log=print):
     os.makedirs(out, exist_ok=True)
-    tr = roll[roll.trace_id.notna()].copy()
-    tr["y"] = traces.loc[tr.trace_id, "y"].values
     roll = roll.copy()
-    roll["y"] = np.where(roll.trace_id.notna(), traces.reindex(roll.trace_id.fillna("")).y.values, np.nan)
+    has = roll.trace_id.notna()
+    roll["y"] = np.where(has, traces.reindex(roll.trace_id.fillna("")).y.values, np.nan)
+    # answer agreement: continuations whose final answer is the source trace's own final answer
+    src_ans = traces.reindex(roll.trace_id.fillna("")).answer.values
+    roll["agree"] = [np.mean([same(a, s) for a in ans]) if h else np.nan
+                     for ans, s, h in zip(roll.answers, src_ans, has)]
+    if meta is not None:
+        pos = roll.checkpoint.map(lambda c: int(CKPTS[c]) if c in CKPTS else -1)
+        keys = list(zip(roll.trace_id.fillna(""), pos))
+        found = [k in meta.index for k in keys]
+        miss = [k for k, f, h in zip(keys, found, has) if h and not f]
+        if miss:
+            raise SystemExit(f"{len(miss)} cuts have no meta row (e.g. {miss[:3]}); pass the meta the probes used")
+        flags = [answer_flags(meta.at[k, "prefix"], s) if h else (np.nan, np.nan)
+                 for k, s, h in zip(keys, src_ans, has)]
+        roll["committed"] = [f[0] for f in flags]
+        roll["written"] = [f[1] for f in flags]
+        roll["restarts"] = [meta.at[k, "restarts"] if h else np.nan for k, h in zip(keys, has)]
+    tr = roll[has].copy()
 
     # sanity: t0 restarts should track each problem's tag-B pass rate
     t0 = roll[roll.checkpoint == "t0"].set_index("problem_id")
@@ -135,12 +253,20 @@ def run(roll, traces, preds_dir, out, drift=None, n_boot=N_BOOT, log=print):
             f"(mean {a.mean():.3f} vs {b.mean():.3f})")
     desc = describe(roll, traces)
     desc.to_csv(os.path.join(out, "r_by_source.csv"), index=False)
-    log("\nr_hat by checkpoint and source trace outcome\n" + desc.round(3).to_string(index=False))
+    log("\nr_hat and answer agreement by checkpoint and source trace outcome\n"
+        + desc.round(3).to_string(index=False))
+    curves(roll, out)
 
     variants = [("all traces", tr)]
     if drift is not None:
         variants.append((f"without {len(drift & set(tr.trace_id))} retokenization-drift traces",
                          tr[~tr.trace_id.isin(drift)]))
+    if meta is not None:
+        # only cuts where the trace has not yet given its answer; the probe is scored on the same cuts
+        variants.append(("before the answer is committed (no </think>, no \\boxed in the cut)",
+                         tr[~tr.committed.astype(bool)]))
+        variants.append(("before the answer value is written anywhere in the cut",
+                         tr[~tr.written.astype(bool)]))
     results = []
     for vname, v in variants:
         for rc, pc in CKPTS.items():
@@ -157,12 +283,17 @@ def run(roll, traces, preds_dir, out, drift=None, n_boot=N_BOOT, log=print):
     allr.to_csv(os.path.join(out, "ceiling_vs_probe.csv"), index=False)
 
     f = lambda v, lo, hi, sgn=False: (f"{v:+.3f} [{lo:+.3f}, {hi:+.3f}]" if sgn else f"{v:.3f} [{lo:.3f}, {hi:.3f}]")
-    lines = ["# r(t) ceiling vs probes, within problem, identical traces\n",
+    lines = ["# Recoverability (r_hat) vs probes, within problem, identical traces\n",
              "- Orientation: P(wrong); AUROC over each problem's correct x wrong pairs, pair-weighted. "
-             "Ceiling score = 1 - r_hat. CIs: problem-clustered bootstrap, draws shared by every row of a "
+             "r_hat score = 1 - r_hat. CIs: problem-clustered bootstrap, draws shared by every row of a "
              "checkpoint, so deltas are paired.",
-             "- r_hat uses K continuations per prefix; ties and binomial noise make the ceiling a lower bound. "
-             "`r_finished` drops truncated continuations from the denominator.",
+             "- The true recovery probability r(t) is the theoretical ceiling. r_hat is its estimate from K "
+             "sampled continuations; ties and binomial noise pull its AUROC toward 0.5, so it understates "
+             "the ceiling. `r_finished` drops truncated continuations from the denominator.",
+             "- `restart density (raw)` is the unfitted rate of 'wait / hold on / let me re- / actually' per "
+             "1000 tokens of the cut (taxonomy.RESTART), a self-correction proxy; higher = P(wrong).",
+             "- The 'before the answer' variants keep only cuts that do not yet hold the answer; each "
+             "checkpoint's pairs are rebuilt from those cuts, and the probes are scored on the same cuts.",
              "- t0 is omitted from the table: every trace of a problem shares its t0, so its within-problem "
              "AUROC is 0.5 by construction.\n"]
     for vname, g in allr.groupby("variant", sort=False):
@@ -188,6 +319,8 @@ def main():
     ap.add_argument("--traces", default="data/traces_B.jsonl")
     ap.add_argument("--preds", required=True, help="preds/ of the <=4096 probe_cmp run")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--meta", default=None,
+                    help="meta_B.parquet the probes used: prefix text and restarts at each cut")
     ap.add_argument("--no-drift-check", action="store_true", help="skip the tokenizer-based drift variant")
     a = ap.parse_args()
     roll, torn = load_rollouts(a.rollouts)
@@ -199,7 +332,7 @@ def main():
     drift = None if a.no_drift_check else drift_ids(traces, ids)
     if drift is not None:
         print(f"retokenization drift: {len(drift)} of {len(ids)} traces")
-    run(roll, traces, a.preds, a.out, drift)
+    run(roll, traces, a.preds, a.out, drift, load_meta(a.meta) if a.meta else None)
 
 
 if __name__ == "__main__":
