@@ -22,6 +22,10 @@ def arm_of(model, feature):
     return SHORT.get(k, k)
 
 
+def res_key(c, l, arm):
+    return (c, NO_LAYER if arm in SHARED else l, arm)
+
+
 def f3(v):
     return "–" if v is None or not np.isfinite(v) else f"{v:.3f}"
 
@@ -57,7 +61,7 @@ def find(out, name):
     return None
 
 
-def build(out, store, pop, ckpts, layers, seeds, n_perm):
+def build(out, store, pop, ckpts, layers, seeds):
     preds, perm = load(out, ckpts)
     y, groups = pop.y.values, pop.problem_id.values
     order = {t: i for i, t in enumerate(pop.trace_id)}
@@ -101,9 +105,6 @@ def build(out, store, pop, ckpts, layers, seeds, n_perm):
     long = pd.DataFrame(rows)
     long.to_csv(os.path.join(out, "results_long.csv"), index=False)
 
-    def key(c, l, arm):
-        return (c, NO_LAYER if arm in SHARED else l, arm)
-
     # paired deltas, same draws for both arms
     drows = []
     for l in layers:
@@ -112,7 +113,7 @@ def build(out, store, pop, ckpts, layers, seeds, n_perm):
                     [(a, "lr/raw") for a in HIDDEN if a != "lr/raw"] + \
                     [(f"{m}/{f}", f"lr/{f}") for m in ("hgb", "mlp") for f in ("svd50", "topk50")]
             for a, b in comps:
-                ka, kb = key(c, l, a), key(c, l, b)
+                ka, kb = res_key(c, l, a), res_key(c, l, b)
                 if ka not in res or kb not in res:
                     continue
                 d = res[ka]["within"] - res[kb]["within"]
@@ -145,7 +146,7 @@ def build(out, store, pop, ckpts, layers, seeds, n_perm):
 
     delong_path = find(out, "delong.json")
     check_path = find(out, "reextract_check.json")
-    write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, permdf, n_pairs,
+    write_summary(out, store, pop, ckpts, layers, seeds, res, deltas, permdf, n_pairs,
                   delong_path, check_path)
     plot(out, ckpts, res, permdf, layer=PRIMARY[2] if PRIMARY[2] in layers else layers[0])
 
@@ -173,13 +174,14 @@ def reextract_status(path):
     return ("passed" if r.get("passed") else "FAILED") + f": {r.get('summary', '')}"
 
 
-def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, permdf, n_pairs,
+def write_summary(out, store, pop, ckpts, layers, seeds, res, deltas, permdf, n_pairs,
                   delong_path, check_path):
     L = []
     w = L.append
     n_expl = int((deltas.role == "exploratory").sum())
+    popj = json.load(open(os.path.join(out, "population.json")))
     w("# Probe comparison across checkpoints (E0)\n")
-    if json.load(open(os.path.join(out, "population.json"))).get("exploratory"):
+    if popj.get("exploratory"):
         w("> **Exploratory run.** The checkpoint set or layers were chosen after seeing earlier results. "
           "Labels below such as *primary* and *Holm* describe the pipeline's layout, not a pre-declared "
           "test: read every number here as exploratory.\n")
@@ -224,7 +226,7 @@ def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, pe
         for c in ckpts:
             cells = []
             for a in TABLE:
-                r = res.get((c, NO_LAYER if a in SHARED else l, a))
+                r = res.get(res_key(c, l, a))
                 cells.append(fci(r["within"], *r["ci"]) if r else "–")
             cells.append(f3(perm_p95(permdf, c, l)))
             cells.append(fdelta(delta_row(deltas, c, l, "lr/raw", "len")))
@@ -238,7 +240,7 @@ def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, pe
         w(f"**`{end}`, the checkpoint where length is strongest (layer {l}):**\n")
         w("| lr/raw | svd50+len | len | Δ lr/raw − len | Δ svd50+len − len |")
         w("|---|---|---|---|---|")
-        g = lambda a: res.get((end, NO_LAYER if a in SHARED else l, a))
+        g = lambda a: res.get(res_key(end, l, a))
         w("| " + " | ".join(fci(g(a)["within"], *g(a)["ci"]) if g(a) else "–"
                             for a in ("lr/raw", "svd50+len", "len")) +
           f" | {fdelta(delta_row(deltas, end, l, 'lr/raw', 'len'))} | "
@@ -273,7 +275,7 @@ def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, pe
     for line in plain_lines(ckpts, res, deltas, permdf, layers):
         w(f"- {line}")
     w("\n## Secondary: varying population (counts only; later checkpoints are length-selected)\n")
-    vc = pd.DataFrame(json.load(open(os.path.join(out, "population.json")))["varying_secondary"])
+    vc = pd.DataFrame(popj["varying_secondary"])
     w("| " + " | ".join(vc.columns) + " |")
     w("|" + "---|" * len(vc.columns))
     for r in vc.itertuples(index=False):
@@ -283,7 +285,7 @@ def write_summary(out, store, pop, ckpts, layers, seeds, n_perm, res, deltas, pe
 
 def plain_lines(ckpts, res, deltas, permdf, layers):
     l = 20 if 20 in layers else layers[0]
-    get = lambda c, a: res.get((c, NO_LAYER if a in SHARED else l, a))
+    get = lambda c, a: res.get(res_key(c, l, a))
     last = ckpts[-1]
     out = []
     r, n = get(last, "lr/raw"), get(last, "len")
@@ -359,7 +361,7 @@ def plot(out, ckpts, res, permdf, layer):
             ax.plot(x, p95, color="#8a8984", lw=1, zorder=1)
         ax.axhline(0.5, color="#8a8984", lw=1, ls=":", zorder=1)
         for arm in arms:
-            pts = [res.get((c, NO_LAYER if arm in SHARED else layer, arm)) for c in ckpts]
+            pts = [res.get(res_key(c, layer, arm)) for c in ckpts]
             if not any(pts):
                 continue
             v = np.array([p["within"] if p else np.nan for p in pts])
@@ -406,7 +408,7 @@ def main():
                       if not p.endswith(".perm.parquet"))
     layers = sorted({int(v) for v in preds.layer.unique() if v != NO_LAYER}, key=lambda v: (v != 20, -v))
     seeds = sorted(preds.seed.unique())
-    build(out, store, pop, popj["checkpoints"], layers, seeds, None)
+    build(out, store, pop, popj["checkpoints"], layers, seeds)
 
 
 if __name__ == "__main__":

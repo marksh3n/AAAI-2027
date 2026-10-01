@@ -35,7 +35,7 @@ def all_states(model, device, prompt_ids, ids, picks):
     return got
 
 
-def expected_index(src, trace, row, ids, offsets):
+def expected_index(src, trace, row, offsets):
     if src["token_index"] == "pos-1":
         return int(row[src["pos_col"]]) - 1
     if src["token_index"] == "answer_end":
@@ -76,7 +76,7 @@ def main():
             row = meta.iloc[r]
             trace = traces[row.trace_id]
             prompt_ids, ids, offsets = extract.encode(tok, trace)
-            e = expected_index(src, trace, row, ids, offsets)
+            e = expected_index(src, trace, row, offsets)
             if src["token_index"] == "pos-1":
                 names = ["pos-2", "pos-1", "pos", "pos+1"]  # pos-1 is the registered index
             else:

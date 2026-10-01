@@ -178,7 +178,7 @@ def main():
     done = {c for c in ckpts if saved_ok(paths[c][0], cfg_sha) and (not n_perm or saved_ok(paths[c][1], cfg_sha))}
     todo = [c for c in ckpts if c not in done]
     first = None
-    for i, ckpt in enumerate(ckpts):
+    for ckpt in ckpts:
         path, perm_path = paths[ckpt]
         if ckpt in done:
             print(f"[{ckpt}] predictions for this config already saved, skipping", flush=True)
@@ -241,7 +241,7 @@ def main():
                   f"(tf-idf scaled by text length; budget 2 h: {'ok' if proj <= 7200 else 'OVER'})", flush=True)
 
     print(f"\nfitting done in {fmt(time.time() - t_start)}; building report", flush=True)
-    report.build(out, store, pop, ckpts, layers, seeds, n_perm)
+    report.build(out, store, pop, ckpts, layers, seeds)
     print(f"total {fmt(time.time() - t_start)}")
 
 

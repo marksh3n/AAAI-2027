@@ -154,7 +154,6 @@ class Store:
 
     def __init__(self, data_dir, reg=None, names=None, log=print):
         self.reg = reg or load_registry()
-        self.data_dir = data_dir
         self.traces = load_traces(data_dir, self.reg)
         self.sources, self.acts, frames = {}, {}, []
         conventions = set()
@@ -198,8 +197,7 @@ class Store:
         return sorted(set.intersection(*sets))
 
     def rows(self, ckpt, trace_ids):
-        sub = self.table[self.table.ckpt == ckpt].set_index("trace_id").loc[list(trace_ids)]
-        return sub
+        return self.table[self.table.ckpt == ckpt].set_index("trace_id").loc[list(trace_ids)]
 
     def hidden(self, ckpt, trace_ids, layer):
         sub = self.rows(ckpt, trace_ids)

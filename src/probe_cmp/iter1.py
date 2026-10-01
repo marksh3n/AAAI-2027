@@ -1,4 +1,4 @@
-# Step 7: the iteration-1 "0.887 vs 0.854" check. BETWEEN-problem (one trace per problem):
+# the iteration-1 "0.887 vs 0.854" check. BETWEEN-problem (one trace per problem):
 # 367 traces of 367 problems, so this AUROC mostly measures difficulty. the within-problem
 # version of the same comparison is the end row of run.py's report, and that is the primary one.
 # 0.887 = Colab cell 41: layer 16, StandardScaler + LR(C=0.01), StratifiedKFold(5, shuffle, 0),
@@ -114,7 +114,8 @@ def main():
     per_seed = []
     for s in range(N_SEEDS):
         ps = 1 - probe_oof(x, correct, s)
-        per_seed.append({"seed": s, "probe": roc_auc_score(wrong, ps), "delta": roc_auc_score(wrong, ps) - len_auc,
+        auc = roc_auc_score(wrong, ps)
+        per_seed.append({"seed": s, "probe": auc, "delta": auc - len_auc,
                          "delong_p": delong(wrong, ps, steps)["p"]})
     dels = np.array([r["delta"] for r in per_seed])
     result.update({

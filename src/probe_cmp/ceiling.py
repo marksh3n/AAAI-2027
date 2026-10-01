@@ -13,11 +13,9 @@ import numpy as np
 import pandas as pd
 
 import stats as S
+from report import NO_LAYER, arm_of
 
-MAX_NEW = 32768
 CKPTS = {"p512": "512", "p2048": "2048", "p4096": "4096"}  # rollout checkpoint -> probe_cmp checkpoint
-SHORT = {"lr/len": "len", "lr/tfidf": "tfidf", "lr/svd50+len": "svd50+len"}
-NO_LAYER = -999
 ARMS = [("lr/raw", 20), ("lr/raw", 16), ("lr/svd50", 20), ("hgb/svd50", 20), ("svd50+len", 20),
         ("len", NO_LAYER), ("tfidf", NO_LAYER)]
 N_BOOT = 2000
@@ -110,7 +108,7 @@ def drift_ids(traces, ids):
 
 def load_preds(path):
     p = pd.read_parquet(path)
-    p["arm"] = [SHORT.get(f"{m}/{f}", f"{m}/{f}") for m, f in zip(p.model, p.feature)]
+    p["arm"] = [arm_of(m, f) for m, f in zip(p.model, p.feature)]
     # seed-averaged per trace, as report.py does
     return p.groupby(["layer", "arm", "trace_id"], as_index=False).agg(p=("p", "mean"), y=("y", "first"))
 
@@ -140,7 +138,8 @@ def compare(sub, preds, n_boot=N_BOOT):
         w = pairs.auroc(s)
         bw, _ = S.boot_within(pairs, s, draws)
         boots[name] = bw
-        rows.append({"score": name, "auroc": w["weighted"], "ci_low": S.ci(bw)[0], "ci_high": S.ci(bw)[1],
+        lo, hi = S.ci(bw)
+        rows.append({"score": name, "auroc": w["weighted"], "ci_low": lo, "ci_high": hi,
                      "n_traces": len(sub), "n_problems": w["n_problems"], "n_pairs": w["n_pairs"]})
     out = pd.DataFrame(rows)
     ref = boots["r_hat"]
@@ -150,12 +149,12 @@ def compare(sub, preds, n_boot=N_BOOT):
     out["delta_ci_low"] = [S.ci(ref - boots[n])[0] for n, _ in d]
     out["delta_ci_high"] = [S.ci(ref - boots[n])[1] for n, _ in d]
     out["delta_p"] = [S.boot_p(ref - boots[n]) if n != "r_hat" else np.nan for n, _ in d]
-    # tied pairs under r_hat: how much K=8 discreteness caps the ceiling
+    # tied pairs under r_hat: how much K=8 discreteness caps r_hat's AUROC
     dd = (1 - sub.r.values)[pairs.wrong] - (1 - sub.r.values)[pairs.correct]
     return out, float((dd == 0).mean()) if len(dd) else np.nan
 
 
-def describe(r, traces):
+def describe(r):
     # mean r by the source trace's outcome, and how often a prefix is already decided
     rows = []
     for c, g in r.groupby("checkpoint"):
@@ -251,7 +250,7 @@ def run(roll, traces, preds_dir, out, drift=None, meta=None, n_boot=N_BOOT, log=
         c = np.corrcoef(a, b)[0, 1] if a.std() > 0 and b.std() > 0 else float("nan")
         log(f"t0 sanity: r(t0) vs the problem's tag-B pass rate over {len(t0)} problems, r = {c:.2f} "
             f"(mean {a.mean():.3f} vs {b.mean():.3f})")
-    desc = describe(roll, traces)
+    desc = describe(roll)
     desc.to_csv(os.path.join(out, "r_by_source.csv"), index=False)
     log("\nr_hat and answer agreement by checkpoint and source trace outcome\n"
         + desc.round(3).to_string(index=False))

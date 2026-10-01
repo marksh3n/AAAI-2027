@@ -100,8 +100,7 @@ check("drift variant drops the flagged traces; problem 0 loses its correct side 
       set(v.n_traces) == {46} and set(v.n_problems) == {11}, (set(v.n_traces), set(v.n_problems)))
 
 print("\n3. agreement, answer-in-prefix, restarts, curves")
-ro = C.load_rollouts(rp)[0]
-check("answers kept per prefix", ro.set_index("prefix_id").loc["ceil/2_0/p512", "answers"][:2] == ["7", "7"])
+check("answers kept per prefix", roll.set_index("prefix_id").loc["ceil/2_0/p512", "answers"][:2] == ["7", "7"])
 dsc = desc.set_index(["checkpoint", "source trace"])
 check("agreement with the source's own answer: 6/8 for right sources, 5/8 for wrong ones",
       np.isclose(dsc.loc[("p2048", "correct"), "mean agreement"], 0.75)

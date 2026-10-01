@@ -38,7 +38,7 @@ def check_one(src, data_dir, traces, reg, ref_norms):
     print(f"\n=== {src['name']}: {src['acts']} + {src['meta']}")
     if not (os.path.exists(a) and os.path.exists(m)):
         print("  files not present")
-        return False, None
+        return False
     meta, acts = pd.read_parquet(m), np.load(a, mmap_mode="r")
     print(f"  acts {acts.shape} {acts.dtype}; meta {meta.shape}, columns {list(meta.columns)}")
     print(f"  layers (registry) {src['layers']}, convention {src['layer_convention']}, "
@@ -69,7 +69,7 @@ def check_one(src, data_dir, traces, reg, ref_norms):
             r = norms[src["layers"].index(l)] / ref[ref_src["layers"].index(l)]
             print(f"    L{l:>3}: {norms[src['layers'].index(l)]:8.1f} vs {ref[ref_src['layers'].index(l)]:8.1f}"
                   f"  ratio {r:5.2f}" + ("   <-- check convention" if not 0.67 <= r <= 1.5 else ""))
-    return ok, norms
+    return ok
 
 
 def main():
@@ -106,7 +106,7 @@ def main():
             break
     all_ok = True
     for s in todo:
-        ok, _ = check_one(s, a.data, traces, reg, ref if ref and ref[0]["name"] != s["name"] else None)
+        ok = check_one(s, a.data, traces, reg, ref if ref and ref[0]["name"] != s["name"] else None)
         all_ok &= ok
 
     if not all_ok:

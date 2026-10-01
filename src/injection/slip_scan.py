@@ -225,10 +225,10 @@ def right_context(text, end):
     if c.isalpha():
         if not spaced:
             return "unit or variable"
-        word = re.match(r"[^\W\d_]+", r).group(0).lower()
+        raw = re.match(r"[^\W\d_]+", r).group(0)
+        word = raw.lower()
         if word in UNITS:
             return "unit"
-        raw = re.match(r"[^\W\d_]+", r).group(0)
         if word in MATH_WORDS or (len(word) == 1 and word not in "ai") or any(ch.isupper() for ch in raw):
             return "variable or function"  # "= 2 QM^2": the written value is a coefficient
     return None
@@ -253,8 +253,9 @@ def find_claims(text):
     for m in CLAIM.finditer(text):
         start, end = m.start(), m.end()
         lhs, rhs = m.group("lhs"), m.group("rhs")
+        norm = normalize(lhs)
         rec = {"start": start, "end": end, "eq": text.index("=", m.end("lhs")), "statement": m.group(0),
-               "lhs": normalize(lhs), "ops": ops_of(normalize(lhs)), "written_literal": rhs.strip()}
+               "lhs": norm, "ops": ops_of(norm)}
         reason = (left_context(text, start) or right_context(text, end)
                   or approx_context(text, start, end, rhs))
         div = re.fullmatch(rf"[-−]?{SP}(\d+){SP}/{SP}(\d+)", rhs.strip())
@@ -265,14 +266,14 @@ def find_claims(text):
             reason = "fraction written for a non-division"  # 3*277 = 831/43216: a numerator
         if reason is None:
             try:
-                true, written = evaluate(normalize(lhs)), evaluate(normalize(rhs))
+                true, written = evaluate(norm), evaluate(normalize(rhs))
                 d = decimals(rhs)
                 if true == written or (d and abs(true - written) <= Fraction(1, 10 ** d)):
                     rec["status"] = "ok"  # exact, or rounded / truncated to the written decimals
                 elif (not d and true.denominator != 1 and written.denominator == 1
                       and written in (math.floor(true), math.ceil(true))):
                     raise Skip("integer part of a non-integer")
-                elif grouped_reading(normalize(lhs)) == written:
+                elif grouped_reading(norm) == written:
                     raise Skip("ambiguous precedence")  # 5*4 /4*5 = 1 meant (5*4)/(4*5)
                 else:
                     rec["status"] = "slip"
@@ -383,7 +384,7 @@ def fmt(v):
 
 
 def annotate(claim, text, window_end, final, repeats=()):
-    # text is the whole trace, - normalised so offsets are unchanged. repeats: spans of the
+    # text is the whole trace; "−" -> "-" keeps offsets unchanged. repeats: spans of the
     # same wrong claim written again, blanked so repetition alone does not count as reuse
     t = text.replace("−", "-")
     for a, b in repeats:
@@ -526,12 +527,13 @@ def main():
                 out.append(r)
         return out
 
+    pools = {k: pool(v) for k, v in firsts.items()}
     breakdown = {k: {"slip_type": dict(Counter(r["slip_type"] for r in v).most_common()),
                      "context": dict(Counter(r["context"] for r in v).most_common()),
                      "with_controls": sum(bool(r["controls"]) for r in v),
-                     "detection_pool": len(pool(v)),
-                     "detection_pool_traces": len({r["trace_id"] for r in pool(v)}),
-                     "detection_pool_problems": len({r["problem_id"] for r in pool(v)}),
+                     "detection_pool": len(pools[k]),
+                     "detection_pool_traces": len({r["trace_id"] for r in pools[k]}),
+                     "detection_pool_problems": len({r["problem_id"] for r in pools[k]}),
                      "max_slips_in_one_trace": max(Counter(r["trace_id"] for r in v).values(), default=0)}
                  for k, v in firsts.items()}
     summary = {"traces_file": path, "excluded": dict(excluded), "window_tokens": a.window,

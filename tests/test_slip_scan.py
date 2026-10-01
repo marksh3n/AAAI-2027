@@ -1,6 +1,6 @@
 # slip_scan: claim detection, false-positive skips, exact evaluation, load-bearing and
 # self-correction flags, and an end-to-end run on a tiny traces file. CPU, no tokenizer.
-import json, os, subprocess, sys, tempfile
+import csv, json, os, subprocess, sys, tempfile
 from fractions import Fraction
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -174,7 +174,6 @@ with tempfile.TemporaryDirectory() as d:
               and w["max_slips_in_one_trace"] == 1, w)
         check("claims file has every evaluated claim", [x["status"] for x in cl] == ["slip", "ok", "slip", "ok"],
               [x["status"] for x in cl])
-        import csv
         au = list(csv.DictReader(open(os.path.join(d, "audit_T.csv"))))
         check("audit sheet: one row per first-occurrence slip, blank label column",
               len(au) == 1 and au[0]["real (y/n)"] == "" and "12 \\times 11" in au[0]["statement"], au)

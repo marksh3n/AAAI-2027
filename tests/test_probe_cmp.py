@@ -1,4 +1,4 @@
-# Plain script, exits non-zero on failure. CPU only, synthetic data, well under a minute.
+# Plain script, exits non-zero on failure. CPU only, synthetic data.
 import copy, json, os, subprocess, sys, tempfile
 import numpy as np
 import pandas as pd
@@ -22,7 +22,7 @@ def check(name, cond, extra=""):
         fails.append(name)
 
 
-# ---------- synthetic E0-shaped data: 20 problems x 6 traces, positions 8 and 16, an end,
+# synthetic E0-shaped data: 20 problems x 6 traces, positions 8 and 16, an end,
 # and a "Mark-style" intermediate source at 24 added through the registry alone
 DIM, LAYERS, L20 = 80, [-1, 0, 4, 8, 12, 16, 20, 24, 27], 6
 
@@ -66,7 +66,6 @@ def make_data(d, rng):
     mm["prefix"] = ["".join(tokens[t][:24]) for t in mm.trace_id]
     mm.to_parquet(os.path.join(d, "meta_M.parquet"))
     np.save(os.path.join(d, "acts_M.npy"), acts_for(mm.trace_id))
-    return traces
 
 
 def registry(extra=False):
@@ -84,7 +83,7 @@ tmp = tempfile.mkdtemp()
 rng = np.random.default_rng(0)
 make_data(tmp, rng)
 
-# ---------- within-problem AUROC, hand computed
+# within-problem AUROC, hand computed
 # p1: wrong [.9, .5] vs correct [.5, .2] -> 1 + 1 + 1/2 (tie) + 1 = 3.5 of 4
 # p2: wrong [.1] vs correct [.3] -> 0 of 1.  p3: all correct -> no pairs
 y = np.array([1, 1, 0, 0, 1, 0, 0, 0])
@@ -107,7 +106,7 @@ rep = np.repeat(np.arange(60), w)
 check("weighted pooled AUROC = AUROC on duplicated rows",
       np.isclose(S.weighted_pooled(yy, ss, w[None])[0], roc_auc_score(yy[rep], ss[rep])))
 
-# ---------- permutation keeps each problem's counts
+# permutation keeps each problem's counts
 gg = np.repeat(np.arange(30), 6)
 y0 = rng.integers(0, 2, len(gg))
 yp = S.permute_within(y0, gg, np.random.default_rng(1))
@@ -115,7 +114,7 @@ same = all(y0[gg == k].sum() == yp[gg == k].sum() for k in range(30))
 check("within-problem permutation preserves per-problem label counts", same)
 check("and actually moves labels", (yp != y0).any())
 
-# ---------- DeLong, hand computed (structural components)
+# DeLong, hand computed (structural components)
 # A: pos [.9,.6] neg [.7,.2] -> V10 [1, .5], V01 [.5, 1], AUC .75
 # B: pos [.8,.3] neg [.4,.5] -> V10 [1, 0],  V01 [.5,.5], AUC .5
 # var = (.125 + .5 - 2*.25)/2 + (.125 + 0 - 0)/2 = .125
@@ -145,7 +144,7 @@ dl = S.delong(ya, sa, sb)
 check("fast DeLong = naive O(mn) DeLong with ties", np.isclose(dl["se"] ** 2, naive_delong_var(ya, sa, sb)))
 check("DeLong AUC = sklearn", np.isclose(dl["auc1"], roc_auc_score(ya, sa)))
 
-# ---------- registry and alignment asserts
+# registry and alignment asserts
 reg = registry()
 store = D.Store(tmp, reg=reg, log=lambda *_: None)
 check("checkpoints come from the registered files", store.ckpts == ["8", "16", "end"], f"{store.ckpts}")
@@ -202,7 +201,7 @@ full = [store.traces.at[t, "text"] for t in ids]
 check("paragraphs are counted on the prefix only",
       (np.expm1(E[:, 1]) <= np.array([D.paragraphs(x) for x in full])).all())
 
-# ---------- folds
+# folds
 pop = p3
 fmap = R.make_folds(pop, [0, 1, 2])
 for sd in (0, 1, 2):
@@ -215,7 +214,7 @@ check("inner CV is grouped and stays inside the training fold",
       all(not set(pop.problem_id.values[a]) & set(pop.problem_id.values[b]) and set(a) | set(b) <= set(fi[0][0])
           for a, b in inner))
 
-# ---------- fold-local fitting: a spy records what each transform is fitted on
+# fold-local fitting: a spy records what each transform is fitted on
 X = store.hidden("8", ids, 20)
 yv, gv = pop.y.values, pop.problem_id.values
 tr, te = fi[0]
@@ -252,7 +251,7 @@ check("fold tf-idf == TfidfVectorizer(min_df=2) fitted on training docs",
       np.allclose(Ftr.toarray(), ref.transform([docs[i] for i in tr]).toarray())
       and np.allclose(Fte.toarray(), ref.transform([docs[i] for i in te]).toarray()))
 
-# ---------- end to end: run.py --quick on the synthetic data, planted signal recovered
+# end to end: run.py --quick on the synthetic data, planted signal recovered
 reg_path = os.path.join(tmp, "registry.json")
 json.dump(registry(extra=True), open(reg_path, "w"))
 out = os.path.join(tmp, "out")
@@ -285,7 +284,7 @@ if r.returncode == 0:
     check("a rerun resumes from saved predictions", "already saved, skipping" in r2.stdout, r2.stdout[-300:])
     check("default run is not flagged exploratory", "Exploratory run" not in summ)
 
-# ---------- plain summary reads the sign: a significant negative delta is not "beats length"
+# plain summary reads the sign: a significant negative delta is not "beats length"
 import report  # noqa: E402
 res = {(c, 20, "lr/raw"): {"within": v, "ci": (v - .1, v + .1)} for c, v in (("a", .42), ("b", .55), ("end", .78))}
 res[("end", report.NO_LAYER, "len")] = {"within": .77, "ci": (.7, .84)}
@@ -299,7 +298,7 @@ dl.loc[dl.checkpoint == "b", ["delta", "p_holm_primary"]] = [.12, .01]
 early = report.plain_lines(["a", "b", "end"], res, dl, pd.DataFrame(), [20])[1]
 check("significant positive delta is reported as beating length", "beat length early, at b" in early, early)
 
-# ---------- extra layers + --exploratory: own output dir, flagged summary, layer 20 kept
+# extra layers + --exploratory: own output dir, flagged summary, layer 20 kept
 cmd3 = [sys.executable, os.path.join(ROOT, "src", "probe_cmp", "run.py"), "--data", tmp, "--out", out,
         "--registry", reg_path, "--checkpoints", "8", "--layers", "12", "--exploratory", "--perms", "0",
         "--jobs", "1", "--min-problems", "5"]
