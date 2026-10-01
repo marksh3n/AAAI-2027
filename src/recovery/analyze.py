@@ -6,7 +6,8 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 
-from common import OUT_DIR, answers_match, read_jsonl, wilson
+from common import OUT_DIR, read_jsonl, wilson
+from generate import answers_match
 
 LABELS = ("correct", "wrong")
 
@@ -200,7 +201,6 @@ def main():
     print(f"{len(conts)}/{len(prefixes)} prefixes have rollouts"
           + (f"; {len(missing)} without" if missing else ""))
 
-    # per prefix
     rows = []
     for pid, c in conts.items():
         p = by_id[pid]
@@ -221,7 +221,6 @@ def main():
     df = trace_table(prefixes, conts)
     order = ckpt_order(df)
 
-    # per problem x checkpoint x source label
     agg = (df.groupby(["problem_id", "checkpoint", "trace_label"])
            .agg(n=("n", "sum"), k=("k", "sum"), stability=("stability", "mean"),
                 trunc_rate=("trunc_rate", "mean"), cut_frac=("cut_frac", "mean")).reset_index())
@@ -250,7 +249,6 @@ def main():
     print(f"-> mean within {w:.4f} vs between {b:.4f}: "
           + ("add samples per prefix" if w > b else "add problems"))
 
-    # commitment
     print(f"\ncommitment (stability >= {args.tau} from that cut onward)")
     com = []
     for tid, g in df.groupby("trace_id"):
@@ -284,7 +282,6 @@ def main():
               f"{pk / pn:.2f}  p={pv:.3f}{'  <-- FLAG' if flag else ''}")
     print(f"{flags} flagged")
 
-    # top-up list
     prefix_r = dict(zip(per_prefix.prefix_id, per_prefix.r))
     up = topup(df, prefix_r, *args.topup_band, args.topup_drop, args.topup_n)
     with open(f"{args.out_dir}/topup.jsonl", "w") as f:

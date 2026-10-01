@@ -101,10 +101,6 @@ def stamp_part(manifest, n, path, entry):
     return entry
 
 
-def record_part(manifest, n, path, trace, trace_ids, token_idx):
-    return stamp_part(manifest, n, path, expect_part(trace, trace_ids, token_idx))
-
-
 def shared_prefix(seqs):
     # tokens shared by every sample of a problem
     n = 0
@@ -362,7 +358,7 @@ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
         if os.path.exists(part):
             print(f"re-extracting {n} ({trace['trace_id']}): {why}", flush=True)
         np.save(part, activations(model, device, prompt_ids, feed, token_idx))
-        record_part(manifest, n, part, trace, trace_ids, token_idx)
+        stamp_part(manifest, n, part, want[n])
         written += 1
         if written % MANIFEST_EVERY == 0:
             save_manifest(parts_dir, manifest)
@@ -440,7 +436,7 @@ def steps(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, reb
         if os.path.exists(part):
             print(f"re-extracting {n} ({trace['trace_id']}): {why}", flush=True)
         np.save(part, activations(model, device, prompt_ids, trace_ids, token_idx))
-        record_part(manifest, n, part, trace, trace_ids, token_idx)
+        stamp_part(manifest, n, part, want[n])
         written += 1
         if written % MANIFEST_EVERY == 0:
             save_manifest(parts_dir, manifest)

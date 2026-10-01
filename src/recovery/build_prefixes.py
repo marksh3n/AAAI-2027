@@ -4,8 +4,9 @@ import argparse, bisect, json, os
 from collections import Counter, defaultdict
 import numpy as np
 
-from common import (MAX_NEW, OUT_DIR, canonical, encode_trace, load_tokenizer, out_path,
-                    prompt_ids, build_prompt)
+from common import (MAX_NEW, OUT_DIR, canonical, encode_trace, load_tokenizer, prompt_ids,
+                    build_prompt)
+from generate import out_path
 
 FRACTIONS = {"f25": 0.25, "f50": 0.50, "f75": 0.75}
 THINK_END = "</think>"

@@ -8,8 +8,9 @@
 import argparse, json, os, time
 from collections import Counter, defaultdict
 
-from common import MODEL, OUT_DIR, TOP_P, answers_match, extract_boxed, prefix_seed, read_jsonl
+from common import MODEL, OUT_DIR, TOP_P, prefix_seed, read_jsonl
 from cache import StaleCache, changed_keys, sha_obj, short
+from generate import answers_match, extract_boxed
 
 VLLM_VERSION = "0.10.2"
 LOG_SECONDS = 60
@@ -371,7 +372,7 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
 
 def progress(prefixes, done, round_, n, tok_s, rate):
     # per tier: prefixes and planned tokens done / left, and what the rest would cost
-    by_tier = defaultdict(lambda: Counter())
+    by_tier = defaultdict(Counter)
     for r in prefixes:
         t = r.get("tier", "-")
         key = "done" if (r["prefix_id"], round_) in done else "left"

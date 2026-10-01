@@ -1,12 +1,11 @@
-# Modal wrapper for the r(t) ceiling run. Every step runs one of the src/recovery scripts
-# in a container with the "e0-recovery" Volume at /vol:
+# Modal wrapper for the r(t) ceiling run; usage in RUN_MODAL.md. Each step runs one
+# src/recovery script with the "e0-recovery" Volume at /vol:
 #   /vol/inputs   traces_B.jsonl, prefixes_ceiling.jsonl   (scripts/modal_upload.sh)
 #   /vol/outputs  rollouts, temperature check, smoke files
 #   /vol/hf       HF_HOME, so the model downloads once
-# the scripts write straight to the Volume; a thread commits it every 2 min and once more
-# at the end. Modal restarts a preempted call on the same input, so a restart gets the
-# same arguments (same --ledger-key) and resumes: done prefixes are skipped and the spend
-# of the lost attempt stays counted. commands: RUN_MODAL.md
+# The scripts write straight to the Volume, committed every COMMIT_S and at exit. Modal
+# restarts a preempted call with the same arguments (same --ledger-key), so the restart
+# skips finished prefixes and keeps the lost attempt's spend.
 import os, subprocess, sys, threading, time
 from pathlib import Path
 
@@ -20,16 +19,16 @@ PREFIXES = f"{INPUTS}/prefixes_ceiling.jsonl"
 ROLLOUTS = f"{OUTPUTS}/rollouts.jsonl"
 TEMP = 0.7  # tag-B sampling temperature; check_temp.py gates it
 COMMIT_S = 120
-DAY = 24 * 3600
+DAY = 24 * 3600  # Modal's maximum function timeout
 
 app = modal.App(NAME)
 vol = modal.Volume.from_name(NAME, create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    # vllm 0.10.2 leaves transformers unpinned, and transformers 5 both breaks it and loads
-    # this model's tokenizer as Qwen2Tokenizer, which drops the BOS that tag-B's string
-    # prompts got (two BOS). 4.56.2 is vllm 0.10.2's contemporary. generate.py imports
-    # datasets and math_verify
+    # vllm 0.10.2 leaves transformers unpinned; transformers 5 breaks it and loads this
+    # model's tokenizer as Qwen2Tokenizer, which drops the second BOS that tag-B's string
+    # prompts got. 4.56.2 is contemporary with vllm 0.10.2. datasets and math-verify are
+    # imported by generate.py.
     .uv_pip_install("vllm==0.10.2", "transformers==4.56.2", "datasets", "math-verify>=0.5")
     .env({"HF_HOME": f"{VOL}/hf", "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false"})
     .add_local_dir(ROOT / "src", "/root/src", ignore=["**/__pycache__", "**/*.pyc"])
@@ -39,7 +38,6 @@ SCRIPTS = {"rollouts": "run_rollouts.py", "check_temp": "check_temp.py",
 
 
 def _work(script, argv):
-    # run one script with the Volume committed in the background; its exit code is the result
     stop = threading.Event()
 
     def commit_loop():

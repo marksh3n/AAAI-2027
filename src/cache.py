@@ -43,9 +43,6 @@ def set_aside(path):
     return dest
 
 
-# ---------------------------------------------------------------- parts manifest
-
-
 def manifest_path(parts_dir):
     return f"{parts_dir}/manifest.json"
 
@@ -107,9 +104,6 @@ def part_ok(entry, path, expect, check_bytes=True):
     if check_bytes and entry.get("sha256") != sha_file(path):
         return "file contents changed since the manifest was written"
     return None
-
-
-# ------------------------------------------------------------- dataset manifest
 
 
 def dataset_manifest_path(meta_path):

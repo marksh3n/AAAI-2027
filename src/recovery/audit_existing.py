@@ -21,9 +21,9 @@ def main():
     problems = []
 
     print("== alignment ==")
-    keys = rec[["trace_id", "pos"]].drop_duplicates().itertuples(index=False)
+    keys = rec[["trace_id", "pos"]].drop_duplicates()
     bad_text, drift = 0, []
-    for tid, pos in keys:
+    for tid, pos in keys.itertuples(index=False):
         t = traces[tid]
         ids, _ = encode_trace(tokenizer, t["text"])
         if not canonical(t, ids):
@@ -32,7 +32,7 @@ def main():
         stored = meta[(meta.trace_id == tid) & (meta.pos == pos)].prefix
         if not len(stored) or stored.iloc[0] != prefix or not t["text"].startswith(prefix):
             bad_text += 1
-    n_keys = len(rec[["trace_id", "pos"]].drop_duplicates())
+    n_keys = len(keys)
     print(f"{n_keys - bad_text}/{n_keys} prefixes: decode(retok[:pos]) == meta prefix and is a "
           "string prefix of the trace")
     print(f"{n_keys - len(drift)}/{n_keys} source traces retokenize to their sampled length "

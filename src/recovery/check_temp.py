@@ -60,8 +60,8 @@ def trace_curves(model, device, p_ids, ids, temps, top_p, chunk):
     return nuc.numpy(), plain.numpy(), outside.numpy()
 
 
-def pick_traces(prefixes, traces, n, seed):
-    # half correct, half wrong, from the traces the ceiling prefix file continues
+def pick_traces(prefixes, traces, seed):
+    # traces the ceiling prefix file continues; candidates are shuffled, correct ones first
     in_file = {r["trace_id"] for r in prefixes if r["trace_id"]}
     pool = [t for t in traces if t["trace_id"] in in_file]
     rng = np.random.default_rng(seed)
@@ -104,7 +104,7 @@ def main():
     temps = np.array(args.temps)
     prefixes = read_jsonl(args.prefix_file)
     by_trace = {r["trace_id"]: r for r in prefixes if r["trace_id"]}
-    pool, candidates = pick_traces(prefixes, read_jsonl(args.traces), args.n_traces, args.seed)
+    pool, candidates = pick_traces(prefixes, read_jsonl(args.traces), args.seed)
     print(f"{len(pool)} population traces; temps {list(temps)}, top_p {args.top_p}, "
           f"<= {args.max_tokens_per_trace} tokens per trace, device {device}", flush=True)
 

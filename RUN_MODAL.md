@@ -61,7 +61,7 @@ modal setup
 uvx --from huggingface_hub hf download MarkSh3n/e0-shared traces_B.jsonl \
     --repo-type dataset --local-dir data/hf
 shasum -a 256 data/hf/traces_B.jsonl                     # starts with c8cb3d8f9b21453b?
-scripts/modal_upload.sh                                  # -> /inputs/traces_B.jsonl on the Volume
+scripts/modal_upload.sh                                  # checks 2202 lines, -> /inputs/traces_B.jsonl
 ```
 
 ## Steps
@@ -86,9 +86,9 @@ modal run scripts/modal_app.py --step bench --gpu h200
 modal run --detach scripts/modal_app.py --step run --gpu h100 --budget 25
 ```
 
-The benchmark writes to the same `/outputs/rollouts.jsonl` as the full run. Its rows use
-the same config, so the full run skips them. `--max-minutes` stops at N minutes. Prefixes
-still running at that point are dropped and run again later, so a short benchmark does not
+The benchmark writes to the same `/outputs/rollouts.jsonl` as the full run with the same
+config, so the full run skips its rows. `--minutes N` (default 5 for `bench`) stops after N
+minutes and drops prefixes still running; they rerun later, so a short benchmark does not
 pay for a long tail.
 
 ## Watching and stopping
@@ -113,6 +113,7 @@ On the dashboard (modal.com/apps), open app `e0-recovery`. The running function
   Each attempt also adds 4 minutes of startup.
 - If Modal preempts the container, it restarts the call with the same arguments. The
   restart resumes from the file and inherits the spend already recorded in
-  `rollouts.jsonl.ledger.json` (the last <= 2 min before the preemption is not recorded).
+  `rollouts.jsonl.ledger.json`. The last few minutes before the preemption are not recorded
+  (the ledger is saved every 60 s, the Volume committed every 2 min).
 - A new `modal run` is a new ledger key, so `--budget` there means the credit left at that
   point.

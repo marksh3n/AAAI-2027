@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# put the inputs of the ceiling run on the e0-recovery Volume. data/ is gitignored, so
-# traces_B.jsonl comes from outside the repo:
-#   TRACES=/path/to/traces_B.jsonl scripts/modal_upload.sh     (default data/hf/traces_B.jsonl)
-# the prefix file is normally built on Modal (--step build); a local one is uploaded only
-# when passed: scripts/modal_upload.sh path/to/prefixes_ceiling.jsonl
+# Upload the ceiling-run inputs to the e0-recovery Volume.
+#   TRACES=/path/to/traces_B.jsonl scripts/modal_upload.sh   (default data/hf/traces_B.jsonl)
+#   scripts/modal_upload.sh path/to/prefixes_ceiling.jsonl  also uploads a local prefix file;
+#                                                            normally built by --step build
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VOL=e0-recovery

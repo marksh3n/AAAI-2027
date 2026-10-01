@@ -4,7 +4,7 @@ import hashlib, json, math, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from generate import MODEL, answers_match, build_prompt, extract_boxed, out_path  # noqa: E402,F401
+from generate import MODEL, build_prompt  # noqa: E402
 
 TOP_P = 0.95  # hardcoded in generate_vllm.py
 MAX_NEW = 32768  # tag-B --max-new, the whole trace budget

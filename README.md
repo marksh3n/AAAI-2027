@@ -1,9 +1,11 @@
 # Ghait---MJJS
 
+The r(t) ceiling run on Modal: see [RUN_MODAL.md](RUN_MODAL.md).
+
 ## Activation cache
 
 Activation parts are keyed by line number in `traces.jsonl`, so a part file existing is
-not evidence it holds the right activations. Every parts directory therefore carries a
+not evidence it holds the right activations. Every parts directory carries a
 `manifest.json`, and a part is reused only when the manifest proves it matches:
 
 - **config hash** — extraction mode, model, rendered prompts (chat template +
@@ -30,7 +32,7 @@ python src/extract.py --fixed --tag B
 python src/extract.py --fixed --tag B --verify --verify-n 8
 python src/extract.py --fixed --tag B --verify --verify-n 8 --adopt
 
-# config genuinely changed: set the old parts aside and extract again
+# config changed: set the old parts aside and extract again
 python src/extract.py --fixed --tag B --rebuild
 
 # probe, optionally re-hashing acts.npy against its manifest
@@ -41,6 +43,10 @@ python tests/test_cache.py       # manifest and stale-reuse paths
 python tests/test_ablation.py    # yield table and TR vs TRH on planted signal
 python tests/test_positions.py   # --positions scoping and per-run output files
 python tests/test_recover.py     # recover.py logic, with torch/vLLM stubbed
+python tests/test_recovery.py    # src/recovery logic: prefixes, scoring, resume, temp MLE
+python tests/test_slip_scan.py   # injection gate 1: claim detection, skips, load-bearing flags
+python tests/test_ceiling.py     # r(t) ceiling vs probes: pooling, alignment, AUROC, paired deltas
+python tests/test_probe_cmp.py   # probe comparison across checkpoints, synthetic data
 ```
 
 `--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a

@@ -251,7 +251,6 @@ with tempfile.TemporaryDirectory() as d:
         check("all prefixes written", len(read_jsonl(f"{d2}/r.jsonl")) == 3)
         check("one request per prefix with n samples",
               [sp.n for _, sp in llm.llm_engine.added] == [2, 2, 2])
-        check("all prefixes written", len(read_jsonl(f"{d2}/r.jsonl")) == 3)
 
     top = types.SimpleNamespace(**{**vars(args), "round": 1})
     work = rr.todo(prefixes, rr.done_rows(out, prefixes), 1, 2, {pid0: 3})
