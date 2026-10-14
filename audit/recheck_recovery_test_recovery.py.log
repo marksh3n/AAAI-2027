@@ -1,0 +1,107 @@
+
+1. step-boundary snapping
+  pass  boundaries after '.\n\n' tokens and at </think>
+  pass  mid-number request snaps back to the previous step
+  pass  request before any boundary snaps to 0
+  pass  request exactly on a boundary stays
+  pass  request past </think> snaps to the </think> cut
+  pass  '\n\n' merged into the next word is not a boundary
+
+2. first mention and pre_final
+  pass  first paragraph mentioning the answer
+  pass  mapped to the cut right before it
+  pass  absent answer gives None
+  pass  </think> before the boxed paragraph wins
+  pass  pre_final token is the </think> cut
+  pass  boxed paragraph inside thinking
+  pass  no boxed gives None
+
+2b. ceiling population, estimates, tiers
+  pass  mixed problems among long untruncated traces
+  pass  keeps correct and wrong traces
+  pass  t0 estimate: mean length, truncated at the cap
+  pass  position estimate: only traces past the cut
+  pass  every problem once
+  pass  tier 1 is the first problems reaching the target
+  pass  tier 1 spans the pass bins
+  pass  seeded
+
+3. Wilson interval
+  pass  k=5 n=10
+  pass  k=0 n=8
+  pass  k=n=8
+
+4. continuation scoring
+  pass  length-capped: no answer
+  pass  answer found in the prefix
+  pass  continuation's later boxed wins
+  pass  and is correct
+  pass  wrong answer scored wrong
+
+5. resumability
+[  0.0 min] 25,795 gen tok/s now, 25,795 avg | running 0 waiting 0 | KV nan% | preemptions 0 | prefixes 2/2 written, 0 running | 0.00M tokens
+  pass  one row per prefix: 2 prefixes
+  pass  each row holds its n samples, in index order
+  pass  token count per sample sums its deltas
+  pass  deltas stitched into each sample's text
+  pass  scored per sample
+  pass  sample seeds follow vLLM's seed + index
+  pass  rerun with the same limit is a no-op
+  pass  torn line tolerated on read
+  pass  torn line cut before appending
+  pass  resume requests only prefixes without a row
+[  0.0 min] 76,260 gen tok/s now, 76,260 avg | running 0 waiting 0 | KV nan% | preemptions 0 | prefixes 2/2 written, 0 running | 0.00M tokens
+  pass  no duplicate (prefix, round)
+  pass  third rerun has nothing to do
+[  0.0 min] 80,556 gen tok/s now, 80,556 avg | running 0 waiting 0 | KV nan% | preemptions 0 | prefixes 3/3 written, 0 running | 0.00M tokens
+  pass  never more than --inflight + n - 1 unfinished samples on the engine
+[  0.0 min] 72,902 gen tok/s now, 72,902 avg | running 0 waiting 0 | KV nan% | preemptions 0 | prefixes 3/3 written, 0 running | 0.00M tokens
+  pass  a finished sample frees its slot before its prefix is done
+  pass  a prefix is admitted whole: at most inflight + n - 1 unfinished
+  pass  all prefixes written
+  pass  one request per prefix with n samples
+  pass  top-up picks only overridden prefixes, with their n
+[  0.0 min] 67,408 gen tok/s now, 67,408 avg | running 0 waiting 0 | KV nan% | preemptions 0 | prefixes 1/1 written, 0 running | 0.00M tokens
+  pass  top-up appended as round 1
+  pass  round 1 draws a different seed stream
+  pass  analysis pools rounds: 2 + 3 continuations
+  pass  prefix stats read continuation rows
+  pass  analysis still reads one-row-per-sample files
+  pass  changed prefix tokens refused
+
+5b. problem units, budget and time stops
+  pass  units group consecutive (tier, problem)
+[  1.0 min] 0 gen tok/s now, 0 avg | running 2 waiting 0 | KV nan% | preemptions 0 | prefixes 1/12 written, 1 running | 0.00M tokens | $3.00 spent of $5.00
+[  2.0 min] 0 gen tok/s now, 0 avg | running 1 waiting 0 | KV nan% | preemptions 0 | prefixes 2/12 written, 1 running | 0.00M tokens | $3.60 spent of $5.00
+not starting new problems: budget: $3.60 spent + $0.00 to finish what is running and this problem >= $5.00 - $2.00
+[  2.3 min] 0 gen tok/s now, 0 avg | running 0 waiting 0 | KV nan% | preemptions 0 | prefixes 3/12 written, 0 running | 0.00M tokens | $3.80 spent of $5.00
+  pass  budget stop is reported
+  pass  each problem complete or not started
+  pass  stops before the budget, with problems left
+  pass  spend stays under the budget
+  pass  started in priority order
+  pass  a retry with the same ledger key inherits the spend
+  pass  a new launch starts its own spend
+not starting new problems: budget: $2.40 spent + $12.00 to finish what is running and this problem >= $10.00 - $2.00
+  pass  a problem whose planned cost would cross the budget is never started
+[  1.2 min] 0 gen tok/s now, 0 avg | running 2 waiting 0 | KV nan% | preemptions 0 | prefixes 1/12 written, 1 running | 0.00M tokens
+stopping now: --max-minutes 1.0 reached; dropping 1 prefixes still running
+  pass  --max-minutes stops the run
+  pass  and leaves work for a resume
+
+6. commitment, ordered by cut
+  pass  monotone
+  pass  dip then recover
+  pass  never
+  pass  committed from t0
+  pass  uses cut order, not name order
+  pass  NaN stability breaks the run
+
+7. adjacent-drop top-up follows cut order
+  pass  drop flags both sides
+  pass  top-up n
+
+8. temperature MLE
+  skip  torch not installed
+
+72 passed, 0 failed

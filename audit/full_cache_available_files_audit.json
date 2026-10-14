@@ -1,0 +1,159 @@
+{
+  "cache_dir": "/workspace/scratch/4402c8afbe6e/e0-audit/drive-e0-full",
+  "checks": {
+    "acts_full.npy.exists": {
+      "passed": false
+    },
+    "config.layer_convention": {
+      "passed": true
+    },
+    "config.layer_order": {
+      "detail": {
+        "actual": [
+          -1,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27
+        ],
+        "expected": [
+          -1,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27
+        ]
+      },
+      "passed": true
+    },
+    "config.readable": {
+      "passed": true
+    },
+    "config.rows_match_metadata": {
+      "detail": {
+        "configured": 15380,
+        "observed": 15380
+      },
+      "passed": true
+    },
+    "config.traces_match_metadata": {
+      "detail": {
+        "configured": 2202,
+        "observed": 2202
+      },
+      "passed": true
+    },
+    "full_config.json.exists": {
+      "passed": true
+    },
+    "full_config.json.unchanged_during_audit": {
+      "passed": true
+    },
+    "meta_full.parquet.exists": {
+      "passed": true
+    },
+    "meta_full.parquet.unchanged_during_audit": {
+      "passed": true
+    },
+    "metadata.checkpoints_in_config": {
+      "detail": {
+        "unknown": []
+      },
+      "passed": true
+    },
+    "metadata.fixed_checkpoint_matches_position": {
+      "passed": true
+    },
+    "metadata.nonempty": {
+      "passed": true
+    },
+    "metadata.nonnull_trace_checkpoint": {
+      "passed": true
+    },
+    "metadata.positive_integer_positions": {
+      "passed": true
+    },
+    "metadata.readable": {
+      "passed": true
+    },
+    "metadata.required_columns": {
+      "detail": {
+        "missing": []
+      },
+      "passed": true
+    },
+    "metadata.sequential_rows": {
+      "passed": true
+    },
+    "metadata.unique_trace_checkpoint": {
+      "passed": true
+    }
+  },
+  "files": {
+    "full_config.json": {
+      "bytes": 460,
+      "sha256_observed_now": "b5aebe2a9bbd06242d6faf9b4d587f62c2a5386eae50d74e29e4ee5b85c9d614"
+    },
+    "meta_full.parquet": {
+      "bytes": 27214377,
+      "sha256_observed_now": "1addd8bd813ae99747198fa90edb1acd03f37ad0833f8d086875ec983faa48e3"
+    }
+  },
+  "historical_input_provenance": "unverified",
+  "limitations": [
+    "Matching file size, shape and fresh checksums do not prove historical token inputs.",
+    "New checksums describe the files read now; no prior extraction manifest is created or inferred.",
+    "This audit does not compare activations with a fresh model pass or rerun probe experiments."
+  ],
+  "read_only": true,
+  "scope": "structural_only",
+  "structural_checks_passed": false
+}

@@ -1,0 +1,23 @@
+{
+  "review_passes": [
+    "Independent reconstruction from actual source, metadata, tokenizer and saved rollout outcomes",
+    "Independent code review plus CPU regression/integration tests; confirmed bug corrected",
+    "Notebook execution, ZIP integrity, source/archive equality and packaged-file checks"
+  ],
+  "data_findings_confirmed": true,
+  "confirmed_bug_fixed": "Resume could reuse completed results after a per-prefix continuation budget or gold answer changed.",
+  "fix": "New rollout rows bind input tokens, continuation budget and gold answer; resume checks effective caps and analysis rejects inconsistent pooling.",
+  "compatibility": "Legacy rows remain readable, but cannot be resumed as newly verified row-format-4 results. Use a separate output for new bound runs.",
+  "original_delivered_cpu_scripts_passed": 10,
+  "post_fix_targeted_cpu_scripts_passed": 6,
+  "new_regression_test_count": 51,
+  "shared_drive_modified": false,
+  "limitations": [
+    "The real 1.37 GB acts_full.npy exceeds the download limit and was not numerically inspected.",
+    "Historical activation input provenance and original generation token IDs cannot be certified from metadata or newly computed hashes.",
+    "Real Transformers/vLLM model execution was not tested; CPU suites use synthetic fixtures and stubs where necessary.",
+    "Research-data probes were not retrained; existing probe AUROCs were cross-checked against exports/logs, not independently reproduced.",
+    "The extraction config identifies the model by name, not an immutable model-weight revision.",
+    "--rebuild only replaces incompatible/unmanifested caches and is not an unconditional fresh forward pass."
+  ]
+}

@@ -1,0 +1,53 @@
+
+1. fresh dir, extract, reuse
+  pass  empty manifest on new dir
+  pass  reuses a part it wrote
+
+2. config change (model swapped) is refused
+  pass  raises on config change
+  pass  names the changed field
+
+3. traces.jsonl reordered, line 0 is a different trace
+  pass  refuses a part keyed to another trace
+
+4. same trace_id, resampled text
+  pass  refuses same id with different text
+
+5. same trace_id and shape, different token count
+  pass  refuses a changed token count
+
+6. positions changed
+  pass  refuses changed token_idx
+
+7. .npy overwritten out of band
+  pass  catches a rewritten file
+  pass  skips the hash when asked
+
+8. a missing part file
+  pass  catches a deleted part
+
+9. a part with no manifest entry
+  pass  catches an unrecorded part
+
+10. parts on disk, no manifest
+  pass  refuses an unmanifested cache
+
+11. --rebuild sets aside, does not delete
+moved the previous cache to /tmp/tmpnhrxv36c.stale-20261013-215344
+  pass  returns an empty manifest
+  pass  old dir is empty of parts
+  pass  old parts were preserved
+
+12. dataset manifest binds meta.parquet to acts.npy
+wrote /tmp/tmpbhyq1kib/meta_B.manifest.json (config 0845d17f13d1)
+  pass  accepts the pair it wrote
+  pass  row count differs
+  pass  acts shape differs
+  pass  row order differs
+  pass  strict catches a rewritten acts.npy
+  pass  non-strict skips the acts hash
+
+13. missing dataset manifest is refused
+  pass  refuses an unmanifested dataset
+
+23 passed, 0 failed

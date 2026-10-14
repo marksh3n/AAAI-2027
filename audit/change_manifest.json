@@ -1,0 +1,96 @@
+{
+  "base_commit": "732da15decc8433226210a3e835f618c57db3543",
+  "scope": "Jaden: trace data, BOS, token/prefix alignment, cache provenance; no GPU jobs",
+  "changes": [
+    {
+      "path": "JADEN_DATA_FIXES.md",
+      "change": "added",
+      "sha256": "f9bd361b86f72348ac58d1fe023150cf17b463b8da2388a8e3438986c4620a6e"
+    },
+    {
+      "path": "README.md",
+      "change": "modified",
+      "sha256": "5e6dd20f7f213a9865434b90431f1384d5dc46beb55cb39e93fb498362c7535c"
+    },
+    {
+      "path": "scripts/audit_full_metadata.py",
+      "change": "added",
+      "sha256": "6ccfb93102306d7c899fb1248bd1960639a867fd843e93b65a61648a526029a8"
+    },
+    {
+      "path": "src/audit_alignment.py",
+      "change": "added",
+      "sha256": "d4b5d2e7a79d25154c2d00bb42e6ae81968cc28bcdd71eb85ad28092afcd9af9"
+    },
+    {
+      "path": "src/audit_full_cache.py",
+      "change": "added",
+      "sha256": "9af3d0ef8d5a8fad653fc30d49eee5c71dc0adc52fcecdd15d6cd252c71dbfdc"
+    },
+    {
+      "path": "src/cache.py",
+      "change": "modified",
+      "sha256": "2665c31005b3229a578e9acdcad2cb8067c55dae0180a329263553f0b72b2753"
+    },
+    {
+      "path": "src/extract.py",
+      "change": "modified",
+      "sha256": "fea168f18bc29646edbe97ce39421a06103e2dacaf36c5aae0759ce4714bd4bf"
+    },
+    {
+      "path": "src/generate.py",
+      "change": "modified",
+      "sha256": "4fe8965659ed2bcba4732e031724a02205ad050458bf79be7de17829ba211587"
+    },
+    {
+      "path": "src/generate_vllm.py",
+      "change": "modified",
+      "sha256": "8a942715bdbe58872467145926537293bb711cd00f24edf37e7a41fb6eac3502"
+    },
+    {
+      "path": "src/probe_cmp/ceiling.py",
+      "change": "modified",
+      "sha256": "d047c247c56d2bdfe22d14d4f2855655b45c8846470216d66ddc77f19f9184a5"
+    },
+    {
+      "path": "src/recovery/build_prefixes.py",
+      "change": "modified",
+      "sha256": "ac2c37c6f3404e689ab4b3fee64ccb9b860b2a58db17e5769ced33b87f1a48a6"
+    },
+    {
+      "path": "src/recovery/common.py",
+      "change": "modified",
+      "sha256": "99bebd57defa6cd50c680350ec5f231dd0d2af69fd97fb4fcff4bf2b7f7a9eaf"
+    },
+    {
+      "path": "src/recovery/run_rollouts.py",
+      "change": "modified",
+      "sha256": "77e13bd31612e4e59f584a3f66b0dc032d34652638733a5530e7be4d17b5f47d"
+    },
+    {
+      "path": "tests/test_alignment_guards.py",
+      "change": "added",
+      "sha256": "d3e373eff4636a241320de60c3feb77cec44c397ddfb21093c4a7124750edab4"
+    },
+    {
+      "path": "tests/test_audit_alignment.py",
+      "change": "added",
+      "sha256": "b8be3bfd3a7a7172f214d7b158698cae02672102cfeacb2b7dc1e94081aa8341"
+    },
+    {
+      "path": "tests/test_audit_full_cache.py",
+      "change": "added",
+      "sha256": "416ace1776fe72dd0df3ca1b142a9ca9855df98060862dafe4039739563a0846"
+    },
+    {
+      "path": "tests/test_ceiling_integrity.py",
+      "change": "added",
+      "sha256": "7ebf3b31cdc23800e717b9246d2c228893f315971e37438b3bb5e8048b1aa0c8"
+    },
+    {
+      "path": "tests/test_trace_inputs.py",
+      "change": "added",
+      "sha256": "421ef7af8e1d1819d8e8febb49f919fbbb3200efc30960d4f239c83015df8e41"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+config 12dd5bc3cb59, 0 parts already in the manifest
+0/2
+reused 0/2 validated parts, extracted 2
+shared prefix across a problem's samples: median 2, max 2
+wrote /tmp/tmpnbn08c18/meta.manifest.json (config 12dd5bc3cb59)
+4 rows, acts (4, 9, 3)
+config 12dd5bc3cb59, 2 parts already in the manifest
+reused 2/2 validated parts, extracted 0
+shared prefix across a problem's samples: median 2, max 2
+wrote /tmp/tmpnbn08c18/meta.manifest.json (config 12dd5bc3cb59)
+4 rows, acts (4, 9, 3)
+config 12dd5bc3cb59, 2 parts already in the manifest
+re-extracting 0 (7_0): prompt_ids_sha changed: cached '0c114a853e401c9600e8db82d3be5a0cef1b4272f3f53dc39075441569bdd0ff' -> current '076a10826b78249dd2031803a51ef0668e25ed1a6694b2939ce15a6927cb8b58'
+0/2
+reused 1/2 validated parts, extracted 1
+shared prefix across a problem's samples: median 2, max 2
+wrote /tmp/tmpnbn08c18/meta.manifest.json (config 12dd5bc3cb59)
+4 rows, acts (4, 9, 3)
+wrote /tmp/tmpto13643c/meta.manifest.json (config 44136fa355b3)
+./workspace/scratch/4402c8afbe6e/e0-repo-review/recheck-unpacked/Ghait---MJJS-jaden-data-fixes/src/cache.py:70: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpnbn08c18/parts/manifest.json' mode='r' encoding='UTF-8'>
+  m = json.load(open(path))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.../workspace/scratch/4402c8afbe6e/e0-repo-review/recheck-unpacked/Ghait---MJJS-jaden-data-fixes/src/cache.py:146: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpto13643c/meta.manifest.json' mode='r' encoding='UTF-8'>
+  m = json.load(open(path))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......
+----------------------------------------------------------------------
+Ran 10 tests in 0.032s
+
+OK

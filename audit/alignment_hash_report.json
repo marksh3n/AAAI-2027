@@ -1,0 +1,90 @@
+{
+  "status": "hash_candidates_verified",
+  "original_generation_token_identity": "not_verified",
+  "activation_input_token_identity": "not_verified",
+  "inputs": {
+    "traces_sha256": "c8cb3d8f9b21453b7240e0e024916586faf6e2c1252e8427dc6cacaf1c13a74b",
+    "rollouts_sha256": "0cbd7c1a9b2d27d54b7949e192a76979d740405641ca95a4a769bf706f2cafc4",
+    "generate_code_sha256": "3bb6e97a8dd00ae59e845594cba71849255f2c3efc48137761ca22d3aff6d925",
+    "tokenizer": {
+      "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+      "revision": "ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562",
+      "files": [
+        {
+          "name": "tokenizer.json",
+          "sha256": "88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "sha256": "8ac8c85fb242563c2260baec0909debd69d718af6a0b3d90e6cab62b4d341cd5"
+        },
+        {
+          "name": "config.json",
+          "sha256": "37bd455e9679d2959536270fed49d25cc7c290a64f6e52abb97c71345a9cee41"
+        }
+      ]
+    }
+  },
+  "valid_audited_records": 1430,
+  "hash_matches_by_bos": {
+    "2": 1430
+  },
+  "distinct_source_traces": 448,
+  "source_batch_trace_counts": {
+    "first_480_lines": 183,
+    "later_lines": 265
+  },
+  "grouped_counts": [
+    {
+      "source_batch": "first_480_lines",
+      "checkpoint": "p2048",
+      "matched_bos_count": 2,
+      "records": 183
+    },
+    {
+      "source_batch": "first_480_lines",
+      "checkpoint": "p4096",
+      "matched_bos_count": 2,
+      "records": 183
+    },
+    {
+      "source_batch": "first_480_lines",
+      "checkpoint": "p512",
+      "matched_bos_count": 2,
+      "records": 183
+    },
+    {
+      "source_batch": "later_lines",
+      "checkpoint": "p2048",
+      "matched_bos_count": 2,
+      "records": 265
+    },
+    {
+      "source_batch": "later_lines",
+      "checkpoint": "p4096",
+      "matched_bos_count": 2,
+      "records": 264
+    },
+    {
+      "source_batch": "later_lines",
+      "checkpoint": "p512",
+      "matched_bos_count": 2,
+      "records": 265
+    },
+    {
+      "source_batch": "problem_start",
+      "checkpoint": "t0",
+      "matched_bos_count": 2,
+      "records": 87
+    }
+  ],
+  "metadata": {
+    "provided": true,
+    "rows": 11409,
+    "duplicate_trace_positions": 0,
+    "missing_rollout_checkpoints": []
+  },
+  "issues": [],
+  "interpretation": "Matching candidates cryptographically reproduce saved rollout input hashes using this repository's hash definition. They do not independently establish the original generation or historical activation inputs.",
+  "source_batch_note": "Line grouping uses configured first_batch_lines=480; this grouping does not itself prove historical BOS counts."
+}

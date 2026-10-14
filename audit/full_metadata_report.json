@@ -1,0 +1,436 @@
+{
+  "status": "metadata_checks_pass",
+  "source_traces": 2202,
+  "metadata_rows": 15380,
+  "layers": [
+    -1,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27
+  ],
+  "expected_array_payload_bytes": 1370173440,
+  "array_downloaded": false,
+  "numerical_array_validated": false,
+  "array_note": "acts_full.npy was not available locally; metadata and expected byte count do not validate its shape, values, row binding or extraction provenance.",
+  "historical_generation_ids_verified": false,
+  "exact_fixed_prefix_matches": 13219,
+  "fixed_prefix_rows": 13219,
+  "exact_end_prefix_matches": 2161,
+  "end_rows": 2161,
+  "input_hash_overlap": {
+    "rows": 1343,
+    "distinct_source_traces": 448,
+    "matching_metadata_declared_inputs": 794,
+    "mismatching_metadata_declared_inputs": 549,
+    "t0_two_bos_matches": 87,
+    "t0_records": 87,
+    "grouped": [
+      {
+        "source_batch": "main",
+        "checkpoint": "p2048",
+        "status": "declared_input_hash_matches",
+        "rows": 265
+      },
+      {
+        "source_batch": "main",
+        "checkpoint": "p4096",
+        "status": "declared_input_hash_matches",
+        "rows": 264
+      },
+      {
+        "source_batch": "main",
+        "checkpoint": "p512",
+        "status": "declared_input_hash_matches",
+        "rows": 265
+      },
+      {
+        "source_batch": "pilot",
+        "checkpoint": "p2048",
+        "status": "declared_input_hash_mismatch",
+        "rows": 183
+      },
+      {
+        "source_batch": "pilot",
+        "checkpoint": "p4096",
+        "status": "declared_input_hash_mismatch",
+        "rows": 183
+      },
+      {
+        "source_batch": "pilot",
+        "checkpoint": "p512",
+        "status": "declared_input_hash_mismatch",
+        "rows": 183
+      }
+    ]
+  },
+  "interpretation": "The overlap check reconstructs the inputs declared by metadata.n_bos and compares their hashes to saved rollout hashes. It does not certify the actual numerical activation inputs. Pilot/main BOS assignments follow full_config and the source line boundary, not original saved generation IDs.",
+  "issues": [],
+  "population": [
+    {
+      "checkpoint": "128",
+      "metadata_n_bos": 1,
+      "rows": 480,
+      "traces": 480,
+      "correct": 213,
+      "wrong": 267,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "256",
+      "metadata_n_bos": 1,
+      "rows": 480,
+      "traces": 480,
+      "correct": 213,
+      "wrong": 267,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "512",
+      "metadata_n_bos": 1,
+      "rows": 480,
+      "traces": 480,
+      "correct": 213,
+      "wrong": 267,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "1024",
+      "metadata_n_bos": 1,
+      "rows": 480,
+      "traces": 480,
+      "correct": 213,
+      "wrong": 267,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "end",
+      "metadata_n_bos": 1,
+      "rows": 453,
+      "traces": 453,
+      "correct": 213,
+      "wrong": 240,
+      "truncated": 0
+    },
+    {
+      "checkpoint": "2048",
+      "metadata_n_bos": 1,
+      "rows": 452,
+      "traces": 452,
+      "correct": 185,
+      "wrong": 267,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "4096",
+      "metadata_n_bos": 1,
+      "rows": 364,
+      "traces": 364,
+      "correct": 117,
+      "wrong": 247,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "6144",
+      "metadata_n_bos": 1,
+      "rows": 305,
+      "traces": 305,
+      "correct": 79,
+      "wrong": 226,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "8192",
+      "metadata_n_bos": 1,
+      "rows": 248,
+      "traces": 248,
+      "correct": 45,
+      "wrong": 203,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "12288",
+      "metadata_n_bos": 1,
+      "rows": 175,
+      "traces": 175,
+      "correct": 11,
+      "wrong": 164,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "16384",
+      "metadata_n_bos": 1,
+      "rows": 131,
+      "traces": 131,
+      "correct": 5,
+      "wrong": 126,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "24576",
+      "metadata_n_bos": 1,
+      "rows": 66,
+      "traces": 66,
+      "correct": 0,
+      "wrong": 66,
+      "truncated": 27
+    },
+    {
+      "checkpoint": "32768",
+      "metadata_n_bos": 1,
+      "rows": 26,
+      "traces": 26,
+      "correct": 0,
+      "wrong": 26,
+      "truncated": 26
+    },
+    {
+      "checkpoint": "128",
+      "metadata_n_bos": 2,
+      "rows": 1722,
+      "traces": 1722,
+      "correct": 1574,
+      "wrong": 148,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "256",
+      "metadata_n_bos": 2,
+      "rows": 1722,
+      "traces": 1722,
+      "correct": 1574,
+      "wrong": 148,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "512",
+      "metadata_n_bos": 2,
+      "rows": 1722,
+      "traces": 1722,
+      "correct": 1574,
+      "wrong": 148,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "1024",
+      "metadata_n_bos": 2,
+      "rows": 1692,
+      "traces": 1692,
+      "correct": 1544,
+      "wrong": 148,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "end",
+      "metadata_n_bos": 2,
+      "rows": 1708,
+      "traces": 1708,
+      "correct": 1574,
+      "wrong": 134,
+      "truncated": 0
+    },
+    {
+      "checkpoint": "2048",
+      "metadata_n_bos": 2,
+      "rows": 1209,
+      "traces": 1209,
+      "correct": 1067,
+      "wrong": 142,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "4096",
+      "metadata_n_bos": 2,
+      "rows": 606,
+      "traces": 606,
+      "correct": 473,
+      "wrong": 133,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "6144",
+      "metadata_n_bos": 2,
+      "rows": 355,
+      "traces": 355,
+      "correct": 236,
+      "wrong": 119,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "8192",
+      "metadata_n_bos": 2,
+      "rows": 253,
+      "traces": 253,
+      "correct": 146,
+      "wrong": 107,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "12288",
+      "metadata_n_bos": 2,
+      "rows": 134,
+      "traces": 134,
+      "correct": 52,
+      "wrong": 82,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "16384",
+      "metadata_n_bos": 2,
+      "rows": 74,
+      "traces": 74,
+      "correct": 17,
+      "wrong": 57,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "24576",
+      "metadata_n_bos": 2,
+      "rows": 30,
+      "traces": 30,
+      "correct": 1,
+      "wrong": 29,
+      "truncated": 14
+    },
+    {
+      "checkpoint": "32768",
+      "metadata_n_bos": 2,
+      "rows": 13,
+      "traces": 13,
+      "correct": 0,
+      "wrong": 13,
+      "truncated": 13
+    }
+  ],
+  "analysis_counts": [
+    {
+      "ckpt": "128",
+      "traces": 599,
+      "problems": 103,
+      "wrong": 243
+    },
+    {
+      "ckpt": "256",
+      "traces": 599,
+      "problems": 103,
+      "wrong": 243
+    },
+    {
+      "ckpt": "512",
+      "traces": 599,
+      "problems": 103,
+      "wrong": 243
+    },
+    {
+      "ckpt": "1024",
+      "traces": 598,
+      "problems": 103,
+      "wrong": 243
+    },
+    {
+      "ckpt": "end",
+      "traces": 599,
+      "problems": 103,
+      "wrong": 243
+    },
+    {
+      "ckpt": "2048",
+      "traces": 545,
+      "problems": 97,
+      "wrong": 237
+    },
+    {
+      "ckpt": "4096",
+      "traces": 448,
+      "problems": 87,
+      "wrong": 212
+    },
+    {
+      "ckpt": "6144",
+      "traces": 342,
+      "problems": 74,
+      "wrong": 177
+    },
+    {
+      "ckpt": "8192",
+      "traces": 227,
+      "problems": 59,
+      "wrong": 128
+    },
+    {
+      "ckpt": "12288",
+      "traces": 78,
+      "problems": 26,
+      "wrong": 46
+    },
+    {
+      "ckpt": "16384",
+      "traces": 26,
+      "problems": 9,
+      "wrong": 15
+    },
+    {
+      "ckpt": "24576",
+      "traces": 2,
+      "problems": 1,
+      "wrong": 1
+    },
+    {
+      "ckpt": "32768",
+      "traces": 0,
+      "problems": 0,
+      "wrong": 0
+    }
+  ],
+  "table_population_counts_checked": true,
+  "table_population_counts_match": true,
+  "hashes": {
+    "traces": "c8cb3d8f9b21453b7240e0e024916586faf6e2c1252e8427dc6cacaf1c13a74b",
+    "meta_full": "1addd8bd813ae99747198fa90edb1acd03f37ad0833f8d086875ec983faa48e3",
+    "full_config": "b5aebe2a9bbd06242d6faf9b4d587f62c2a5386eae50d74e29e4ee5b85c9d614",
+    "rollouts": "0cbd7c1a9b2d27d54b7949e192a76979d740405641ca95a4a769bf706f2cafc4",
+    "generation_code": "3bb6e97a8dd00ae59e845594cba71849255f2c3efc48137761ca22d3aff6d925"
+  },
+  "tokenizer": {
+    "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "revision": "ad9f0ae0864d7fbcd1cd905e3c6c5b069cc8b562",
+    "files": [
+      {
+        "name": "tokenizer.json",
+        "sha256": "88145e3c3249adc2546ede277e9819d6e405e19072456e4b521cbc724bd60773"
+      },
+      {
+        "name": "tokenizer_config.json",
+        "sha256": "8ac8c85fb242563c2260baec0909debd69d718af6a0b3d90e6cab62b4d341cd5"
+      },
+      {
+        "name": "config.json",
+        "sha256": "37bd455e9679d2959536270fed49d25cc7c290a64f6e52abb97c71345a9cee41"
+      }
+    ]
+  }
+}

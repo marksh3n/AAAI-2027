@@ -1,0 +1,32 @@
+[
+  {
+    "test": "test_alignment_guards.py",
+    "exit_code": 0,
+    "log": "recovery_test_alignment_guards.py.log"
+  },
+  {
+    "test": "test_ceiling_integrity.py",
+    "exit_code": 0,
+    "log": "recovery_test_ceiling_integrity.py.log"
+  },
+  {
+    "test": "test_audit_alignment.py",
+    "exit_code": 0,
+    "log": "recovery_test_audit_alignment.py.log"
+  },
+  {
+    "test": "test_audit_full_cache.py",
+    "exit_code": 0,
+    "log": "recovery_test_audit_full_cache.py.log"
+  },
+  {
+    "test": "test_recovery.py",
+    "exit_code": 0,
+    "log": "recovery_test_recovery.py.log"
+  },
+  {
+    "test": "test_ceiling.py",
+    "exit_code": 0,
+    "log": "recovery_test_ceiling.py.log"
+  }
+]
