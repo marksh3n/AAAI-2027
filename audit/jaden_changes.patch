@@ -1,0 +1,2561 @@
+--- /dev/null
++++ b/JADEN_DATA_FIXES.md
+@@ -0,0 +1,83 @@
++# Jaden's data-checking handoff
++
++This is a reviewed copy of repository commit `732da15decc8433226210a3e835f618c57db3543`. The original uploaded ZIP was not overwritten; changes are in this separate repository copy. No language-model inference, new continuation sampling or research-data probe retraining was run for this audit. CPU tests use small synthetic fixtures.
++
++## What we checked
++
++- The source file contains **2,202 unique traces from 367 problems**. IDs, labels and the 11,409 legacy metadata rows agree; the legacy activation array contains no NaN or infinite values.
++- All **11,409 stored prefix strings** match the decoded token prefixes reconstructed with the pinned tokenizer.
++- All **1,430 complete rollout records** have input hashes matching the reconstructed **two-BOS** prompt and their stated reasoning prefix. This includes 183 source traces from the first 480 source-file lines and 265 from later lines.
++- The supplied repository's legacy `extract.encode` default uses **one BOS**. The rollout hashes establish two BOS for those saved rollout inputs. This is a real difference between the code paths; it does **not**, by itself, prove which inputs produced an old activation array.
++
++The actual shared `e0_full` metadata, config, tables and logs have now been inspected read-only. All **15,380 metadata rows** pass source/row checks: **13,219 fixed prefixes** and **2,161 end strings** agree with the pinned-tokenizer/source reconstruction. The folder contains the **29-layer activation file**, but its 1,370,173,568 bytes exceed the 256 MiB download limit here, so its numerical contents have not been inspected.
++
++On the rollout overlap, **794 main-run records** match the inputs declared by metadata; **549 pilot records from 183 traces** disagree because metadata declares one BOS while those rollout hashes match two. The latest recovery table already excludes the pilot: 265 traces / 52 problems at 512 and 2048; 264 / 52 at 4096. Do not mix these rows with the old 87-problem comparison or the larger grid table.
++
++Original generation token IDs and extraction-time input hashes were not saved in these legacy full-cache files. Matching metadata or current checksums cannot certify the historical activations' exact inputs. Full numerical and historical-provenance verification remain open. Nothing in the shared Drive folder was changed.
++
++## Data issue already isolated
++
++The original rollout file has **10 malformed opening lines**, including an unrelated configuration header. They were quarantined without inventing replacement data. The cleaned file retains **1,430 complete records / 11,440 continuations**. One complete record remains missing: `ceil/216_2/p4096`.
++
++Use the cleaned file whose SHA256 is:
++
++`0cbd7c1a9b2d27d54b7949e192a76979d740405641ca95a4a769bf706f2cafc4`
++
++It is in the prior handoff's `cleaned_data/recovery_ceiling_clean.jsonl`, beside `cleaning_manifest.json`. Do not silently fill in the missing prefix or mix the unrelated opening header with these records.
++
++## What changed in the code
++
++- `generate.py` and `generate_vllm.py`: future records save the actual prompt and generated token IDs with hashes.
++- `extract.py` and `cache.py`: extraction records input hashes; cache reuse checks inputs and metadata. `--adopt` is disabled because approximate activation agreement cannot establish exact historical token inputs.
++- `recovery/common.py`, `build_prefixes.py` and `run_rollouts.py`: saved token IDs take priority; reconstructed legacy inputs remain explicitly labeled. Resume checks prevent changed inputs or conflicting results from being silently reused.
++- `probe_cmp/ceiling.py`: malformed/conflicting records fail clearly, and recorded extraction/rollout hash disagreements stop the comparison. Missing provenance is reported as unverified.
++- `audit_alignment.py`: CPU-only reconstruction of one- and two-BOS candidates, checked against every stored rollout input hash.
++
++## Rerun the CPU hash audit
++
++Run from the repository folder. Replace the input paths below with your local files. The tokenizer folder needs `tokenizer.json`, `tokenizer_config.json`, `config.json` and `tokenizer_manifest.json`.
++
++```bash
++python -m pip install pandas pyarrow tokenizers jinja2
++python src/audit_alignment.py \
++  --traces /path/to/traces_B.jsonl \
++  --rollouts /path/to/recovery_ceiling_clean.jsonl \
++  --rollout-manifest /path/to/cleaning_manifest.json \
++  --tokenizer-dir /path/to/pinned_tokenizer_folder \
++  --out data/alignment_audit
++```
++
++Optionally add `--meta /path/to/meta_B.parquet` to check that every rollout checkpoint has one matching metadata row. The manifest check rejects an incomplete or changed cleaned file.
++
++The audit writes `alignment_hash_report.json`, `alignment_hash_rows.csv` and `alignment_hash_issues.csv`. A successful hash audit confirms the saved rollout hash candidates; it does not certify historical generation or activation inputs.
++
++Eight focused test scripts passed. Detailed logs and real-data checks are in `audit/`. The hash-audit unit tests can be repeated with:
++
++```bash
++python -m unittest discover -s tests -p test_audit_alignment.py
++```
++
++## Read-only full-cache check
++
++The cache has been found; no further folder upload is needed. Where the large array is already accessible, run:
++
++```bash
++python -B src/audit_full_cache.py --cache-dir /path/to/e0_full --expected-acts-bytes 1370173568
++```
++
++This prints JSON and never writes to the cache. It checks shape, dtype, finite values, metadata order, file size and current checksums. It labels the result structural-only and historical provenance unverified. Its tiny-fixture tests do not substitute for running it on the real 1.37 GB array.
++
++The downloaded result tables agree with their completed rerun log; all 805 long-form result cells match the rounded summaries. No probes were retrained. The first table run failed at the missing `216_2/p4096` record; the completed rerun explicitly excluded it. Detailed findings are in `audit/full_metadata_report.json` and `audit/full_table_review.json`.
++
++The metadata audit is reproducible with `scripts/audit_full_metadata.py --help`; use an output directory outside the source/cache folders. The old wrapper has weak part-reuse provenance. Any controlled re-extraction should be a separate coding-team decision; no GPU rerun or Drive modification has been launched by this handoff.
++
++
++## Independent recheck
++
++An independent reconstruction confirmed the metadata, prefix strings, all saved rollout hash candidates, cohort counts and all 805 table cells. The three main-only recovery AUROCs and bootstrap confidence intervals were independently recomputed from saved continuation outcomes and matched exactly. Count flags remain diagnostic: the EOS-aware check flags 16 recovery-source traces, without proving original token identities.
++
++The code review found and corrected one actual resume bug: token equality alone allowed a changed continuation budget or gold answer to reuse completed samples. `run_rollouts.py` now uses row format 4 and binds tokens, budget and gold answer; both execution call sites validate the effective continuation cap. The analysis loader refuses inconsistent pooling across rounds. Older unbound files remain readable for analysis/status, but a new bound run requires a separate output; never fabricate historical bindings.
++
++All ten selected CPU scripts passed on the original delivered ZIP. After the fix, six targeted suites passed, and the new guard/audit code has 51 regression tests across five files. The final loader accepted the actual cleaned 1,430 records and rejected the original corrupt file. Evidence is in `audit/recheck_summary.json` and the associated `recheck_` files.
++
++Real GPU/Transformers/vLLM integration is not validated by these CPU tests. The full activation file and historical input provenance remain unverified. Model names are not immutable weight revisions. `--rebuild` only replaces incompatible/unmanifested caches and can reuse same-config parts; do not describe it as forcing a new forward pass. No shared Drive files were changed.
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,9 @@
+ # Ghait---MJJS
+ 
+ The r(t) ceiling run on Modal: see [RUN_MODAL.md](RUN_MODAL.md).
++
++For the reviewed data/alignment fixes and remaining verification limits, see
++[Jaden's handoff](JADEN_DATA_FIXES.md). No GPU jobs were run for that review.
+ 
+ ## Activation cache
+ 
+@@ -14,12 +17,13 @@
+   actually reads — the other is inert, so it is hashed as null. A change to any of these
+   refuses the whole directory.
+ - **per part** — `trace_id`, a hash of the trace's problem + text + `structured` flag, the
+-  trace's token count, the exact token indices extracted at, the array shape, and the
+-  file's sha256.
++  trace's token count, ordered prompt/generated-token hashes, the exact token indices
++  extracted at, the array shape, and the file's sha256.
+ 
+ `meta.parquet` and `acts.npy` are joined by row index alone, so extraction also writes
+-`meta*.manifest.json` binding the two together; `probe.py` and `probe_fixed.py` refuse to
+-run on a pair that cannot be shown to come from one extraction under one config.
++`meta*.manifest.json` binding the two together. Strict checking requires hashes of
++both files. Newly created manifests prevent later mismatches; a manifest fabricated
++after extraction cannot establish historical provenance.
+ 
+ Nothing is ever deleted: a refused cache is moved to `<dir>.stale-<timestamp>`.
+ 
+@@ -27,10 +31,8 @@
+ # normal run: reuses whatever the manifest can validate, extracts the rest
+ python src/extract.py --fixed --tag B
+ 
+-# a directory written before manifests existed (run B) -- re-extract a sample and
+-# compare it against the cache, then stamp a manifest if it reproduces
++# diagnostic comparison only; this does not certify or adopt a legacy cache
+ python src/extract.py --fixed --tag B --verify --verify-n 8
+-python src/extract.py --fixed --tag B --verify --verify-n 8 --adopt
+ 
+ # config changed: set the old parts aside and extract again
+ python src/extract.py --fixed --tag B --rebuild
+@@ -49,6 +51,8 @@
+ python tests/test_probe_cmp.py   # probe comparison across checkpoints, synthetic data
+ ```
+ 
+-`--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a
+-different `CHUNK` move the last bits, but a part belonging to a different trace or a
+-different model moves the direction, so cosine separates the two cleanly.
++`--verify` compares per-(row, layer) cosine rather than exact equality. Approximate
++agreement does not prove exact historical BOS/token inputs, so `--adopt` is disabled
++in extractor v3. Fresh extraction is required to establish new input-bound records.
++Legacy text-only traces remain explicitly unverified; use a source-bound
++`--bos-policy` when reconstructing an agreed legacy prompt convention.
+--- /dev/null
++++ b/scripts/audit_full_metadata.py
+@@ -0,0 +1,232 @@
++#!/usr/bin/env python3
++"""Read-only full-cache metadata audit; never validates an unavailable array."""
++import argparse
++from collections import Counter, defaultdict
++import csv
++import hashlib
++import json
++from pathlib import Path
++import re
++import sys
++
++import numpy as np
++import pandas as pd
++
++
++def sha(path):
++    h = hashlib.sha256()
++    with Path(path).open("rb") as f:
++        for chunk in iter(lambda: f.read(1024 * 1024), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
++
++def csv_write(path, rows, fields):
++    with Path(path).open("w", newline="") as f:
++        w = csv.DictWriter(f, fieldnames=fields)
++        w.writeheader()
++        w.writerows(rows)
++
++
++def run(args):
++    sys.path.insert(0, str(args.repo_src))
++    from audit_alignment import LocalTokenizer, input_hash, load_build_prompt, strict_loads
++
++    args.out.mkdir(parents=True, exist_ok=True)
++    cfg = strict_loads((args.full_dir / "full_config.json").read_text())
++    m = pd.read_parquet(args.full_dir / "meta_full.parquet")
++    tm = strict_loads((args.tokenizer_dir / "tokenizer_manifest.json").read_text())
++    for f in tm["files"]:
++        if sha(args.tokenizer_dir / f["name"]) != f["sha256"]:
++            raise ValueError(f"Tokenizer artifact changed: {f['name']}")
++    tok = LocalTokenizer(args.tokenizer_dir)
++    build_prompt = load_build_prompt(args.generation_code)
++    traces = [strict_loads(line) for line in args.traces.open()]
++    if len({t["trace_id"] for t in traces}) != len(traces):
++        raise ValueError("Duplicate source trace IDs")
++    by_source = {t["trace_id"]: (i, t) for i, t in enumerate(traces)}
++    by_problem = {t["problem_id"]: t for t in traces}
++    issues, overlaps, population = [], [], []
++
++    def flag(check, location, detail):
++        issues.append(dict(check=check, location=str(location), detail=str(detail)))
++
++    required = {"trace_id", "problem_id", "line", "n_bos", "ckpt", "pos", "is_correct", "trunc", "n_gen", "prefix", "restarts", "row"}
++    if not required <= set(m.columns):
++        raise ValueError(f"Missing metadata columns {required - set(m.columns)}")
++    if cfg.get("rows") != len(m) or cfg.get("traces") != len(traces):
++        flag("config_counts", "all", f"metadata={len(m)}, source={len(traces)}, config={cfg}")
++    if cfg.get("layers") != list(range(-1, 28)):
++        flag("config_layers", "all", cfg.get("layers"))
++    if cfg.get("layer_convention") != "hidden_states[l+1]":
++        flag("layer_convention", "all", cfg.get("layer_convention"))
++    if cfg.get("bos") != f"1 for lines < {args.pilot_lines}, else 2":
++        flag("config_bos_policy", "all", cfg.get("bos"))
++    if cfg.get("token_index") != "pos-1; end = last trace token":
++        flag("config_token_index", "all", cfg.get("token_index"))
++    if m.row.tolist() != list(range(len(m))):
++        flag("row_order", "all", "row is not the contiguous zero-based parquet row order")
++    for row in m[m.duplicated(["trace_id", "ckpt"], keep=False)].itertuples():
++        flag("duplicate_trace_checkpoint", row.row, f"{row.trace_id}/{row.ckpt}")
++    for tid in sorted(set(m.trace_id) - set(by_source)):
++        flag("unknown_trace", tid, "Metadata source trace not found")
++
++    rollout_by_trace, t0 = defaultdict(list), []
++    rollout_seen = set()
++    for line, raw in enumerate(args.rollouts.open(), 1):
++        r = strict_loads(raw)
++        key = (r["prefix_id"], r["round"])
++        if key in rollout_seen:
++            raise ValueError(f"Duplicate rollout prefix/round: {key}")
++        rollout_seen.add(key)
++        small = {k: v for k, v in r.items() if k != "samples"}
++        if r["trace_id"] is None:
++            t0.append(small)
++        else:
++            rollout_by_trace[r["trace_id"]].append(small)
++    grouped = {tid: rows for tid, rows in m.groupby("trace_id", sort=False)}
++    prompt_cache, expected_sequence = {}, []
++    exact_fixed = exact_end = total_fixed = total_end = 0
++    restart_pattern = re.compile(r"\b(wait|hold on|let me re|actually)\b", re.I)
++    for line, trace in enumerate(traces):
++        tid = trace["trace_id"]
++        ids = tok.encode(trace["text"])
++        rows = grouped.get(tid, m.iloc[:0])
++        expected_positions = [p for p in cfg["positions"] if p <= len(ids)]
++        has_end = not trace["trunc"] and "</think>" in trace["text"]
++        expected_ckpts = [str(p) for p in expected_positions] + (["end"] if has_end else [])
++        expected_sequence.extend((tid, c) for c in expected_ckpts)
++        if list(rows.ckpt) != expected_ckpts:
++            flag("checkpoint_set_or_order", tid, f"expected={expected_ckpts}, actual={list(rows.ckpt)}")
++        for row in rows.itertuples(index=False):
++            for key in ("problem_id", "n_gen", "trunc"):
++                if getattr(row, key) != trace[key]:
++                    flag("source_field", row.row, f"{key}: {getattr(row,key)!r} != {trace[key]!r}")
++            if row.line != line:
++                flag("source_line", row.row, f"{row.line} != {line}")
++            expected_bos = 1 if line < args.pilot_lines else 2
++            if row.n_bos != expected_bos:
++                flag("metadata_bos_policy", row.row, f"{row.n_bos} != {expected_bos}")
++            if bool(row.is_correct) != (bool(trace["is_correct"]) and not trace["trunc"]):
++                flag("correctness_label", row.row, "Mismatch with source correctness-and-not-truncated convention")
++            expected_pos = len(ids) if row.ckpt == "end" else int(row.ckpt)
++            if row.pos != expected_pos:
++                flag("checkpoint_position", row.row, f"{row.pos} != {expected_pos}")
++            expected_prefix = trace["text"] if row.ckpt == "end" else tok.backend.decode(ids[:expected_pos], skip_special_tokens=False)
++            matches = row.prefix == expected_prefix
++            if row.ckpt == "end":
++                total_end += 1
++                exact_end += matches
++            else:
++                total_fixed += 1
++                exact_fixed += matches
++            if not matches:
++                flag("prefix_text", row.row, f"{tid}/{row.ckpt}: expected_sha={hashlib.sha256(expected_prefix.encode()).hexdigest()}")
++            restart = len(restart_pattern.findall(expected_prefix)) / max(expected_pos, 1) * 1000
++            if not np.isclose(row.restarts, restart, rtol=1e-12, atol=1e-12):
++                flag("restart_density", row.row, f"{row.restarts} != {restart}")
++        for rollout in rollout_by_trace.get(tid, []):
++            ckpt = rollout["checkpoint"]
++            cut = rollout["cut_token_idx"]
++            selection = rows[rows.ckpt == str(cut)]
++            if len(selection) != 1:
++                flag("rollout_meta_join", rollout["prefix_id"], f"Metadata matches={len(selection)}")
++                continue
++            mr = selection.iloc[0]
++            if ckpt != f"p{cut}" or rollout["problem_id"] != trace["problem_id"]:
++                flag("rollout_source_cut", rollout["prefix_id"], "Trace/problem/checkpoint mismatch")
++            prompt_key = (trace["problem_id"], trace.get("structured", False))
++            if prompt_key not in prompt_cache:
++                rendered = build_prompt(tok, trace["problem"], trace.get("structured", False))
++                p = tok.encode(rendered)
++                if p[0] != tok.bos_token_id or p[1] == tok.bos_token_id:
++                    raise ValueError("Expected one-BOS chat template")
++                prompt_cache[prompt_key] = p
++            one = prompt_cache[prompt_key]
++            candidate = [tok.bos_token_id] * (int(mr.n_bos) - 1) + one
++            h = input_hash(candidate, ids[:cut])
++            saved = rollout["prefix_sha"]
++            status = "declared_input_hash_matches" if h == saved else "declared_input_hash_mismatch"
++            overlaps.append(dict(prefix_id=rollout["prefix_id"], trace_id=tid, problem_id=trace["problem_id"],
++                                 checkpoint=ckpt, cut_token_idx=cut, meta_row=int(mr.row), source_line=line,
++                                 source_batch="pilot" if line < args.pilot_lines else "main", metadata_n_bos=int(mr.n_bos),
++                                 one_bos_hash_matches=input_hash(one, ids[:cut]) == saved,
++                                 two_bos_hash_matches=input_hash([tok.bos_token_id] + one, ids[:cut]) == saved,
++                                 metadata_declared_input_sha=h, saved_rollout_prefix_sha=saved, status=status,
++                                 numerical_activation_provenance_verified=False))
++    if list(zip(m.trace_id, m.ckpt)) != expected_sequence:
++        flag("global_row_sequence", "all", "Metadata order differs from source order × planned checkpoints")
++    for tid in set(rollout_by_trace) - set(by_source):
++        flag("unknown_rollout_source", tid, "Trace does not exist")
++    t0_two = 0
++    for r in t0:
++        t = by_problem[r["problem_id"]]
++        ids = tok.encode(build_prompt(tok, t["problem"], False))
++        if r["cut_token_idx"] != 0:
++            flag("t0_cut", r["prefix_id"], r["cut_token_idx"])
++        t0_two += input_hash([tok.bos_token_id] + ids, []) == r["prefix_sha"]
++    overlap_groups = Counter((r["source_batch"], r["checkpoint"], r["status"]) for r in overlaps)
++    for (ckpt, n_bos), group in m.groupby(["ckpt", "n_bos"], sort=False):
++        population.append(dict(checkpoint=ckpt, metadata_n_bos=int(n_bos), rows=len(group),
++                               traces=group.trace_id.nunique(), correct=int(group.is_correct.sum()),
++                               wrong=int((~group.is_correct).sum()), truncated=int(group.trunc.sum())))
++    analysis_counts = []
++    for ckpt, group in m.groupby("ckpt", sort=False):
++        group = group[~group.trunc]
++        distinct_labels = group.groupby("problem_id").is_correct.nunique()
++        group = group[group.problem_id.isin(distinct_labels[distinct_labels == 2].index)]
++        analysis_counts.append(dict(ckpt=str(ckpt), traces=len(group), problems=int(group.problem_id.nunique()),
++                                    wrong=int((~group.is_correct).sum())))
++    table_count_checks = []
++    count_path = args.full_dir / "e0_full_table_counts.csv"
++    if count_path.exists():
++        table_counts = pd.read_csv(count_path, dtype={"ckpt": str})
++        reconstructed = pd.DataFrame(analysis_counts)
++        joined = table_counts.merge(reconstructed, on="ckpt", suffixes=("_table", "_reconstructed"), how="outer")
++        for record in joined.to_dict("records"):
++            record["matches"] = all(record[f"{col}_table"] == record[f"{col}_reconstructed"]
++                                    for col in ["traces", "problems", "wrong"])
++            table_count_checks.append(record)
++            if not record["matches"]:
++                flag("table_population_counts", record["ckpt"], record)
++    payload_bytes = len(m) * len(cfg["layers"]) * 1536 * 2
++    report = dict(status="metadata_checks_pass" if not issues else "metadata_issues_found",
++                  source_traces=len(traces), metadata_rows=len(m), layers=cfg["layers"],
++                  expected_array_payload_bytes=payload_bytes,
++                  array_downloaded=False, numerical_array_validated=False,
++                  array_note="acts_full.npy was not available locally; metadata and expected byte count do not validate its shape, values, row binding or extraction provenance.",
++                  historical_generation_ids_verified=False,
++                  exact_fixed_prefix_matches=int(exact_fixed), fixed_prefix_rows=total_fixed,
++                  exact_end_prefix_matches=int(exact_end), end_rows=total_end,
++                  input_hash_overlap=dict(rows=len(overlaps), distinct_source_traces=len({r['trace_id'] for r in overlaps}),
++                                          matching_metadata_declared_inputs=sum(r['status']=='declared_input_hash_matches' for r in overlaps),
++                                          mismatching_metadata_declared_inputs=sum(r['status']=='declared_input_hash_mismatch' for r in overlaps),
++                                          t0_two_bos_matches=int(t0_two), t0_records=len(t0),
++                                          grouped=[dict(source_batch=k[0], checkpoint=k[1], status=k[2], rows=v) for k,v in sorted(overlap_groups.items())]),
++                  interpretation="The overlap check reconstructs the inputs declared by metadata.n_bos and compares their hashes to saved rollout hashes. It does not certify the actual numerical activation inputs. Pilot/main BOS assignments follow full_config and the source line boundary, not original saved generation IDs.",
++                  issues=issues, population=population, analysis_counts=analysis_counts,
++                  table_population_counts_checked=bool(table_count_checks),
++                  table_population_counts_match=all(r["matches"] for r in table_count_checks) if table_count_checks else None,
++                  hashes={"traces":sha(args.traces), "meta_full":sha(args.full_dir/'meta_full.parquet'),
++                          "full_config":sha(args.full_dir/'full_config.json'), "rollouts":sha(args.rollouts),
++                          "generation_code":sha(args.generation_code)}, tokenizer=tm)
++    (args.out/'full_metadata_report.json').write_text(json.dumps(report,indent=2)+'\n')
++    csv_write(args.out/'full_metadata_issues.csv',issues,['check','location','detail'])
++    csv_write(args.out/'full_metadata_rollout_overlap.csv',overlaps,list(overlaps[0]))
++    csv_write(args.out/'full_metadata_population.csv',population,list(population[0]))
++    if table_count_checks:
++        csv_write(args.out/'full_metadata_table_population_checks.csv',table_count_checks,list(table_count_checks[0]))
++    print(json.dumps({k:report[k] for k in ['status','source_traces','metadata_rows','exact_fixed_prefix_matches','fixed_prefix_rows','exact_end_prefix_matches','end_rows','input_hash_overlap','issues']},indent=2))
++
++
++if __name__=='__main__':
++    p=argparse.ArgumentParser(description=__doc__)
++    p.add_argument('--traces',type=Path,required=True)
++    p.add_argument('--rollouts',type=Path,required=True)
++    p.add_argument('--full-dir',type=Path,required=True)
++    p.add_argument('--tokenizer-dir',type=Path,required=True)
++    p.add_argument('--generation-code',type=Path,required=True)
++    p.add_argument('--repo-src',type=Path,required=True)
++    p.add_argument('--pilot-lines',type=int,default=480)
++    p.add_argument('--out',type=Path,required=True)
++    run(p.parse_args())
+--- /dev/null
++++ b/src/audit_alignment.py
+@@ -0,0 +1,245 @@
++"""CPU-only audit of saved rollout input hashes against one/two-BOS candidates.
++
++Pass a clean JSONL rollout file. Every record is validated; malformed or duplicate
++records fail the audit instead of being skipped. Matching a saved prefix hash
++establishes its token candidate under the repository's hash definition, not the
++historical generation inputs or the inputs that produced an activation array.
++"""
++import argparse
++import ast
++from collections import Counter
++import csv
++import hashlib
++import json
++from pathlib import Path
++import re
++
++from cache import sha_obj, sha_file
++
++
++def strict_loads(raw):
++    def object_hook(pairs):
++        out = {}
++        for key, value in pairs:
++            if key in out:
++                raise ValueError(f"duplicate JSON key {key}")
++            out[key] = value
++        return out
++
++    def reject_constant(value):
++        raise ValueError(f"non-finite JSON constant {value}")
++
++    return json.loads(raw, object_pairs_hook=object_hook, parse_constant=reject_constant)
++
++
++def input_hash(prompt_ids, generated_prefix_ids):
++    return sha_obj([list(prompt_ids), list(generated_prefix_ids)])
++
++
++def register_key(seen, key):
++    if key in seen:
++        raise ValueError(f"duplicate prefix/round {key}")
++    seen.add(key)
++
++
++def check_rollout_manifest(path, manifest_path):
++    if manifest_path is None:
++        return
++    expected = strict_loads(Path(manifest_path).read_text())["cleaned_rollouts_sha256"]
++    actual = sha_file(path)
++    if actual != expected:
++        raise ValueError(f"cleaned rollout file hash does not match cleaning manifest: {actual} != {expected}")
++
++
++def bos_candidates(prompt_ids, bos_id):
++    """Candidates are explicit, not an automatic token repair."""
++    ids = list(prompt_ids)
++    n = 0
++    while n < len(ids) and ids[n] == bos_id:
++        n += 1
++    if n != 1:
++        raise ValueError(f"chat template must emit exactly one leading BOS; got {n}")
++    return {1: ids, 2: [bos_id] + ids}
++
++
++def matching_bos(prompt_ids, generated_prefix_ids, bos_id, stored_hash):
++    candidates = bos_candidates(prompt_ids, bos_id)
++    matches = [n for n, p in candidates.items() if input_hash(p, generated_prefix_ids) == stored_hash]
++    return matches[0] if len(matches) == 1 else None
++
++
++def checkpoint_cut(row):
++    checkpoint = row["checkpoint"]
++    if checkpoint == "t0":
++        expected = 0
++        if row["trace_id"] is not None:
++            raise ValueError("t0 must not reference a source trace")
++    else:
++        match = re.fullmatch(r"p([1-9][0-9]*)", str(checkpoint))
++        if not match:
++            raise ValueError(f"unsupported checkpoint {checkpoint!r}")
++        expected = int(match.group(1))
++    if type(row["cut_token_idx"]) is not int or row["cut_token_idx"] != expected:
++        raise ValueError(f"checkpoint {checkpoint} disagrees with cut_token_idx={row['cut_token_idx']}")
++    return expected
++
++
++def load_build_prompt(path):
++    """Load only literal prompt constants and build_prompt, not model imports."""
++    tree = ast.parse(Path(path).read_text())
++    definitions = []
++    names = {"INSTRUCTION", "STRUCTURED"}
++    for node in tree.body:
++        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in node.targets):
++            value = ast.literal_eval(node.value)
++            if not isinstance(value, str):
++                raise ValueError("prompt constants must be literal strings")
++            definitions.append(node)
++        if isinstance(node, ast.FunctionDef) and node.name == "build_prompt":
++            definitions.append(node)
++    scope = {}
++    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(path), "exec"), scope)
++    if not names.issubset(scope) or "build_prompt" not in scope:
++        raise ValueError("generate.py lacks expected prompt function/constants")
++    return scope["build_prompt"]
++
++
++class LocalTokenizer:
++    """Pinned tokenizers backend plus the supplied Jinja chat template."""
++    def __init__(self, directory):
++        from jinja2 import Environment, StrictUndefined
++        from tokenizers import Tokenizer
++        directory = Path(directory)
++        self.config = strict_loads((directory / "tokenizer_config.json").read_text())
++        self.backend = Tokenizer.from_file(str(directory / "tokenizer.json"))
++        self.bos_token = self.config["bos_token"]["content"]
++        self.eos_token = self.config["eos_token"]["content"]
++        self.bos_token_id = self.backend.token_to_id(self.bos_token)
++        self.template = Environment(undefined=StrictUndefined).from_string(self.config["chat_template"])
++
++    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
++        if tokenize:
++            raise ValueError("audit only renders the template; tokenization is explicit")
++        return self.template.render(messages=messages, bos_token=self.bos_token,
++                                    eos_token=self.eos_token, add_generation_prompt=add_generation_prompt)
++
++    def encode(self, text):
++        return self.backend.encode(text, add_special_tokens=False).ids
++
++
++def write_csv(path, rows, fields):
++    with Path(path).open("w", newline="") as handle:
++        writer = csv.DictWriter(handle, fieldnames=fields)
++        writer.writeheader()
++        writer.writerows(rows)
++
++
++def run(args):
++    args.out.mkdir(parents=True, exist_ok=True)
++    check_rollout_manifest(args.rollouts, args.rollout_manifest)
++    manifest = strict_loads((args.tokenizer_dir / "tokenizer_manifest.json").read_text())
++    for file in manifest["files"]:
++        if sha_file(args.tokenizer_dir / file["name"]) != file["sha256"]:
++            raise ValueError(f"tokenizer file hash mismatch: {file['name']}")
++    tokenizer = LocalTokenizer(args.tokenizer_dir)
++    build_prompt = load_build_prompt(args.generation_code)
++    sources, problems, issues = {}, {}, []
++    for line, text in enumerate(args.traces.open(), 1):
++        t = strict_loads(text)
++        if t["trace_id"] in sources:
++            raise ValueError(f"duplicate source trace_id: {t['trace_id']}")
++        if t["problem_id"] in problems and problems[t["problem_id"]]["problem"] != t["problem"]:
++            raise ValueError(f"conflicting problem text: {t['problem_id']}")
++        sources[t["trace_id"]] = (line, t)
++        problems[t["problem_id"]] = t
++    prompts, generated, seen, results = {}, {}, set(), []
++    for physical_line, text in enumerate(args.rollouts.open(), 1):
++        try:
++            r = strict_loads(text)
++            key = (r["prefix_id"], r["round"])
++            register_key(seen, key)
++            cut = checkpoint_cut(r)
++            pid, tid = r["problem_id"], r["trace_id"]
++            if pid not in problems:
++                raise ValueError(f"unknown problem_id {pid}")
++            if tid is not None:
++                if tid not in sources or sources[tid][1]["problem_id"] != pid:
++                    raise ValueError(f"trace/problem mismatch: {tid}/{pid}")
++                source_line, trace = sources[tid]
++                if tid not in generated:
++                    generated[tid] = tokenizer.encode(trace["text"])
++                if cut > len(generated[tid]):
++                    raise ValueError(f"cut exceeds retokenized source: {tid}/{cut}")
++                gen = generated[tid][:cut]
++                structured = bool(trace.get("structured", False))
++                expected_id = f"ceil/{tid}/{r['checkpoint']}"
++                source_batch = "first_480_lines" if source_line <= args.first_batch_lines else "later_lines"
++            else:
++                source_line, source_batch, gen, structured = None, "problem_start", [], False
++                expected_id = f"ceil/{pid}/t0"
++            if r["prefix_id"] != expected_id:
++                raise ValueError(f"prefix_id mismatch; expected {expected_id}")
++            prompt_key = (pid, structured)
++            if prompt_key not in prompts:
++                prompt = build_prompt(tokenizer, problems[pid]["problem"], structured)
++                prompts[prompt_key] = tokenizer.encode(prompt)
++            prompt_ids = prompts[prompt_key]
++            match = matching_bos(prompt_ids, gen, tokenizer.bos_token_id, r["prefix_sha"])
++            if match is None:
++                issues.append(dict(line=physical_line, error="neither one- nor two-BOS candidate matches stored prefix_sha"))
++            results.append(dict(physical_line=physical_line, prefix_id=r["prefix_id"], round=r["round"],
++                                trace_id=tid, problem_id=pid, checkpoint=r["checkpoint"], cut_token_idx=cut,
++                                source_line=source_line, source_batch=source_batch,
++                                matched_bos_count=match, saved_prefix_sha=r["prefix_sha"],
++                                one_bos_sha=input_hash(prompt_ids, gen),
++                                two_bos_sha=input_hash([tokenizer.bos_token_id] + prompt_ids, gen),
++                                encoded_prefix_tokens=len(gen), prompt_tokens_one_bos=len(prompt_ids)))
++        except (KeyError, TypeError, ValueError) as exc:
++            issues.append(dict(line=physical_line, error=str(exc)))
++    metadata_checks = {"provided": bool(args.meta)}
++    if args.meta:
++        import pandas as pd
++        metadata = pd.read_parquet(args.meta)
++        duplicate = metadata.duplicated(["trace_id", "pos"]).sum()
++        keys = set(zip(metadata.trace_id, metadata.pos))
++        absent = [r["prefix_id"] for r in results if r["trace_id"] is not None
++                  and (r["trace_id"], r["cut_token_idx"]) not in keys]
++        metadata_checks.update(rows=len(metadata), duplicate_trace_positions=int(duplicate), missing_rollout_checkpoints=absent)
++        if duplicate or absent:
++            issues.append(dict(line="metadata", error=f"{duplicate} duplicate metadata keys; {len(absent)} missing rollout checkpoints"))
++    groups = Counter((r["source_batch"], r["checkpoint"], r["matched_bos_count"]) for r in results)
++    cohort_ids = sorted({r["trace_id"] for r in results if r["trace_id"] is not None})
++    source_batch_counts = Counter("first_480_lines" if sources[t][0] <= args.first_batch_lines else "later_lines" for t in cohort_ids)
++    report = dict(status="hash_candidates_verified" if not issues and results else "issues_found",
++                  original_generation_token_identity="not_verified", activation_input_token_identity="not_verified",
++                  inputs={"traces_sha256": sha_file(args.traces), "rollouts_sha256": sha_file(args.rollouts),
++                          "generate_code_sha256": sha_file(args.generation_code), "tokenizer": manifest},
++                  valid_audited_records=len(results), hash_matches_by_bos=dict(Counter(str(r["matched_bos_count"]) for r in results)),
++                  distinct_source_traces=len(cohort_ids), source_batch_trace_counts=dict(source_batch_counts),
++                  grouped_counts=[dict(source_batch=k[0], checkpoint=k[1], matched_bos_count=k[2], records=v) for k, v in sorted(groups.items(), key=lambda item: str(item[0]))],
++                  metadata=metadata_checks, issues=issues,
++                  interpretation="Matching candidates cryptographically reproduce saved rollout input hashes using this repository's hash definition. They do not independently establish the original generation or historical activation inputs.",
++                  source_batch_note=f"Line grouping uses configured first_batch_lines={args.first_batch_lines}; this grouping does not itself prove historical BOS counts.")
++    (args.out / "alignment_hash_report.json").write_text(json.dumps(report, indent=2) + "\n")
++    if results:
++        write_csv(args.out / "alignment_hash_rows.csv", results, list(results[0]))
++    write_csv(args.out / "alignment_hash_issues.csv", issues, ["line", "error"])
++    print(json.dumps({k: report[k] for k in ["status", "valid_audited_records", "hash_matches_by_bos", "distinct_source_traces", "source_batch_trace_counts", "metadata", "issues"]}, indent=2))
++    return 0 if report["status"] == "hash_candidates_verified" else 2
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--traces", type=Path, required=True)
++    parser.add_argument("--rollouts", type=Path, required=True)
++    parser.add_argument("--rollout-manifest", type=Path, help="optional cleaning manifest; rejects incomplete/changed derived files")
++    parser.add_argument("--tokenizer-dir", type=Path, required=True, help="local tokenizer files plus tokenizer_manifest.json")
++    parser.add_argument("--generation-code", type=Path, default=Path(__file__).with_name("generate.py"))
++    parser.add_argument("--meta", type=Path)
++    parser.add_argument("--first-batch-lines", type=int, default=480)
++    parser.add_argument("--out", type=Path, required=True)
++    return run(parser.parse_args())
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- /dev/null
++++ b/src/audit_full_cache.py
+@@ -0,0 +1,167 @@
++"""Read-only structural audit of an existing e0_full cache; no model or GPU.
++
++Usage: python -B src/audit_full_cache.py --cache-dir /path/to/e0_full
++Optional: --expected-acts-bytes 1370173568 (the size reported by Drive).
++
++Prints JSON to stdout and exits nonzero on failed checks. It never writes a
++manifest, edits metadata or certifies historical token/activation alignment.
++"""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import sys
++
++sys.dont_write_bytecode = True
++import numpy as np
++import pandas as pd
++
++
++def sha256(path):
++    value = hashlib.sha256()
++    with path.open("rb") as handle:
++        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
++            value.update(block)
++    return value.hexdigest()
++
++
++def audit_cache(cache_dir, expected_acts_bytes=None, chunk_rows=128):
++    root = Path(cache_dir)
++    result = {
++        "scope": "structural_only",
++        "historical_input_provenance": "unverified",
++        "cache_dir": str(root),
++        "read_only": True,
++        "checks": {},
++        "files": {},
++        "limitations": [
++            "Matching file size, shape and fresh checksums do not prove historical token inputs.",
++            "New checksums describe the files read now; no prior extraction manifest is created or inferred.",
++            "This audit does not compare activations with a fresh model pass or rerun probe experiments.",
++        ],
++    }
++    if type(chunk_rows) is not int or chunk_rows <= 0:
++        raise ValueError("chunk_rows must be positive")
++
++    def check(name, passed, detail=None):
++        result["checks"][name] = {"passed": bool(passed)}
++        if detail is not None:
++            result["checks"][name]["detail"] = detail
++
++    paths = {name: root / name for name in ("full_config.json", "meta_full.parquet", "acts_full.npy")}
++    initial_stats = {}
++    for name, path in paths.items():
++        check(name + ".exists", path.is_file())
++        if path.is_file():
++            stat = path.stat()
++            initial_stats[name] = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
++            result["files"][name] = {"bytes": stat.st_size}
++    cfg = meta = acts = None
++    if paths["full_config.json"].is_file():
++        try:
++            with paths["full_config.json"].open() as handle:
++                cfg = json.load(handle)
++            if not isinstance(cfg, dict):
++                raise ValueError("Configuration must be a JSON object")
++            check("config.readable", True)
++            check("config.layer_order", cfg.get("layers") == list(range(-1, 28)),
++                  {"expected": list(range(-1, 28)), "actual": cfg.get("layers")})
++            check("config.layer_convention", cfg.get("layer_convention") == "hidden_states[l+1]")
++        except Exception as exc:
++            check("config.readable", False, f"{type(exc).__name__}: {exc}")
++            cfg = None
++    if paths["meta_full.parquet"].is_file():
++        try:
++            meta = pd.read_parquet(paths["meta_full.parquet"])
++            check("metadata.readable", True)
++            required = {"row", "trace_id", "ckpt", "pos"}
++            check("metadata.required_columns", required <= set(meta.columns),
++                  {"missing": sorted(required - set(meta.columns))})
++            if required <= set(meta.columns):
++                check("metadata.nonempty", len(meta) > 0)
++                check("metadata.sequential_rows", np.array_equal(meta["row"].to_numpy(), np.arange(len(meta))))
++                check("metadata.nonnull_trace_checkpoint", not meta[["trace_id", "ckpt"]].isna().any().any())
++                check("metadata.unique_trace_checkpoint", not meta.duplicated(["trace_id", "ckpt"]).any())
++                pos = pd.to_numeric(meta["pos"], errors="coerce").to_numpy(dtype=float)
++                good_pos = np.isfinite(pos) & (pos > 0) & (pos == np.floor(pos))
++                check("metadata.positive_integer_positions", good_pos.all())
++                checkpoints = meta["ckpt"].astype(str)
++                fixed = checkpoints != "end"
++                fixed_pos = pd.to_numeric(checkpoints[fixed], errors="coerce").to_numpy(dtype=float)
++                check("metadata.fixed_checkpoint_matches_position",
++                      np.isfinite(fixed_pos).all() and np.array_equal(fixed_pos, pos[fixed.to_numpy()]))
++                if cfg is not None:
++                    check("config.rows_match_metadata", type(cfg.get("rows")) is int and cfg["rows"] == len(meta),
++                          {"configured": cfg.get("rows"), "observed": len(meta)})
++                    count = int(meta["trace_id"].nunique())
++                    check("config.traces_match_metadata", type(cfg.get("traces")) is int and cfg["traces"] == count,
++                          {"configured": cfg.get("traces"), "observed": count})
++                    allowed = {str(v) for v in cfg.get("positions", [])}
++                    unknown = sorted(set(checkpoints[fixed]) - allowed)
++                    check("metadata.checkpoints_in_config", not unknown, {"unknown": unknown})
++        except Exception as exc:
++            check("metadata.readable", False, f"{type(exc).__name__}: {exc}")
++            meta = None
++    if paths["acts_full.npy"].is_file():
++        size = paths["acts_full.npy"].stat().st_size
++        if expected_acts_bytes is not None:
++            check("activations.matches_reported_drive_size", size == expected_acts_bytes,
++                  {"expected": expected_acts_bytes, "observed": size,
++                   "meaning": "file size only; not token-input provenance"})
++        try:
++            acts = np.load(paths["acts_full.npy"], mmap_mode="r", allow_pickle=False)
++            if not isinstance(acts, np.memmap):
++                raise ValueError("Expected one memory-mapped NPY array, not an NPZ container")
++            check("activations.readable", True)
++            check("activations.fp16", acts.dtype == np.dtype("float16"), str(acts.dtype))
++            check("activations.three_dimensions", acts.ndim == 3, list(acts.shape))
++            if cfg is not None and meta is not None:
++                expected_shape = (len(meta), len(cfg.get("layers", [])), 1536)
++                check("activations.expected_shape", acts.shape == expected_shape,
++                      {"expected": list(expected_shape), "observed": list(acts.shape)})
++            payload = int(acts.size) * acts.dtype.itemsize
++            check("activations.exact_header_plus_payload_size", size == int(acts.offset) + payload,
++                  {"header_bytes": int(acts.offset), "payload_bytes": payload, "file_bytes": size})
++            nonfinite_rows = []
++            if acts.ndim >= 1:
++                for start in range(0, len(acts), chunk_rows):
++                    block = np.asarray(acts[start:start + chunk_rows])
++                    valid = np.isfinite(block).reshape(len(block), -1).all(axis=1)
++                    nonfinite_rows.extend((start + np.flatnonzero(~valid)).tolist())
++                check("activations.all_finite", not nonfinite_rows,
++                      {"nonfinite_row_count": len(nonfinite_rows), "first_bad_rows": nonfinite_rows[:20]})
++        except Exception as exc:
++            check("activations.readable", False, f"{type(exc).__name__}: {exc}")
++        finally:
++            if isinstance(acts, np.memmap):
++                acts._mmap.close()
++    # Hashes describe present bytes; they must not be relabelled as extraction-time evidence.
++    for name, path in paths.items():
++        if name not in initial_stats:
++            continue
++        try:
++            result["files"][name]["sha256_observed_now"] = sha256(path)
++            stat = path.stat()
++            check(name + ".unchanged_during_audit",
++                  initial_stats[name] == (stat.st_size, stat.st_mtime_ns, stat.st_ino))
++        except Exception as exc:
++            check(name + ".hash_readable", False, f"{type(exc).__name__}: {exc}")
++    result["structural_checks_passed"] = all(item["passed"] for item in result["checks"].values())
++    return result
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--cache-dir", required=True)
++    parser.add_argument("--expected-acts-bytes", type=int)
++    parser.add_argument("--chunk-rows", type=int, default=128)
++    args = parser.parse_args()
++    if args.chunk_rows < 1 or (args.expected_acts_bytes is not None and args.expected_acts_bytes < 1):
++        parser.error("chunk rows and expected byte count must be positive")
++    result = audit_cache(args.cache_dir, args.expected_acts_bytes, args.chunk_rows)
++    print(json.dumps(result, indent=2, sort_keys=True))
++    return 0 if result["structural_checks_passed"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- a/src/cache.py
++++ b/src/cache.py
+@@ -63,7 +63,7 @@
+             return fresh
+         raise StaleCache(
+             f"{len(stray)} parts in {parts_dir}, no manifest.json. Provenance unknown.\n"
+-            "  --verify --adopt   check a sample against a fresh pass, then stamp\n"
++            "  --verify          compare with a fresh pass (diagnostic only)\n"
+             "  --rebuild          set aside and re-extract"
+         )
+ 
+@@ -119,12 +119,17 @@
+         "acts_shape": list(acts_shape),
+         "acts_path": os.path.basename(acts_path),
+         "row_order_hash": sha_obj(list(trace_ids)),
++        # Trace IDs repeat across checkpoints: their order alone cannot bind labels,
++        # prefix positions or token hashes to activation rows.
++        "meta_sha256": sha_file(meta_path),
+         "acts_sha256": sha_file(acts_path) if strict else None,
+         "written": time.strftime("%Y-%m-%d %H:%M:%S"),
+     }
+     path = dataset_manifest_path(meta_path)
+-    with open(path, "w") as f:
++    tmp = f"{path}.tmp"
++    with open(tmp, "w") as f:
+         json.dump(m, f, indent=2, sort_keys=True)
++    os.replace(tmp, path)
+     print(f"wrote {path} (config {short(cfg_hash)})")
+     return m
+ 
+@@ -140,6 +145,12 @@
+         )
+     m = json.load(open(path))
+     problems = []
++    if m.get("meta_sha256") and m["meta_sha256"] != sha_file(meta_path):
++        problems.append("metadata contents changed since the manifest was written")
++    if strict and not m.get("meta_sha256"):
++        problems.append("legacy manifest has no metadata hash; cannot verify labels and checkpoint rows")
++    if strict and not m.get("acts_sha256"):
++        problems.append("manifest has no activation hash; cannot verify activation contents")
+     if m["n_rows"] != len(trace_ids):
+         problems.append(f"meta has {len(trace_ids)} rows, manifest recorded {m['n_rows']}")
+     if list(m["acts_shape"]) != list(acts_shape):
+--- a/src/extract.py
++++ b/src/extract.py
+@@ -15,7 +15,7 @@
+     short,
+     write_dataset_manifest,
+ )
+-from generate import MODEL, build_prompt, out_path
++from generate import MODEL, build_prompt, out_path, recorded_token_inputs, tokenizer_identity
+ from taxonomy import RESTART
+ 
+ TRACES_PATH = "data/traces.jsonl"
+@@ -30,7 +30,7 @@
+ MIN_STEP_TOKENS = 5
+ CHUNK = 1024
+ # bump when the extraction convention changes; invalidates every cached part
+-EXTRACTOR_VERSION = 2
++EXTRACTOR_VERSION = 3
+ # fp16 and CHUNK shift the last bits; a wrong trace shifts direction
+ VERIFY_MIN_COS = 0.99
+ VERIFY_N = 8
+@@ -56,6 +56,7 @@
+         "compute_dtype": "float16" if device == "cuda" else "float32",
+         "stored_dtype": "float16",
+         "tokenizer": str(getattr(tokenizer, "name_or_path", "")),
++        "tokenizer_sha": tokenizer_identity(tokenizer),
+         "vocab_size": len(tokenizer),
+         "prompt_plain": build_prompt(tokenizer, canary, False),
+         "prompt_structured": build_prompt(tokenizer, canary, True),
+@@ -74,12 +75,15 @@
+     )
+ 
+ 
+-def expect_part(trace, trace_ids, token_idx):
++def expect_part(trace, trace_ids, token_idx, prompt_ids=None):
+     return {
+         "trace_id": trace["trace_id"],
+         "trace_sha": trace_sha(trace),
+         "n_trace_tokens": len(trace_ids),
+         "token_idx": list(token_idx),
++        # Include actual ordered inputs: unchanged text/count does not prove identical tokens/BOS.
++        "prompt_ids_sha": sha_obj(prompt_ids) if prompt_ids is not None else None,
++        "trace_ids_sha": sha_obj(trace_ids),
+     }
+ 
+ 
+@@ -147,6 +151,8 @@
+ 
+ 
+ def segment(text, offsets):
++    if offsets is None:
++        raise ValueError("Recorded generation IDs differ from text retokenization; character-based step offsets are unverified. Use fixed checkpoints or resolve token/offset alignment.")
+     spans = step_spans(text)
+     think, answer = spans[:-1], spans[-1]
+     _, counts = last_token_per_span(think, offsets)
+@@ -156,11 +162,39 @@
+     return [s for s, i in keep], [i for s, i in keep]
+ 
+ 
+-def encode(tokenizer, trace):
+-    # must match generation or offsets shift
++def input_source(trace):
++    if "token_input_provenance" in trace:
++        return "recorded_at_generation"
++    return "reconstructed_explicit_bos_policy" if "n_bos" in trace else "reconstructed_legacy_default"
++
++
++def encode(tokenizer, trace, legacy_n_bos=None):
++    # Keep the historical one-BOS default for old wrappers, which adjust BOS themselves.
++    # New recorded IDs take precedence. An old wrapper's one-BOS assertion fails safely
++    # for a recorded two-BOS prompt instead of adding a third BOS silently.
++    stored = recorded_token_inputs(tokenizer, trace)
++    enc = tokenizer(trace["text"], add_special_tokens=False, return_offsets_mapping=True)
++    selected_bos = legacy_n_bos if legacy_n_bos is not None else trace.get("n_bos")
++    if selected_bos is not None and (type(selected_bos) is not int or selected_bos not in (1, 2)):
++        raise ValueError("Explicit n_bos policy must be integer 1 or 2")
++    if stored is not None:
++        prompt_ids, trace_ids = stored
++        if selected_bos is not None:
++            actual = next((i for i, tok in enumerate(prompt_ids) if tok != tokenizer.bos_token_id), len(prompt_ids))
++            if actual != selected_bos:
++                raise ValueError("Explicit BOS policy conflicts with recorded generation IDs")
++        offsets = enc["offset_mapping"] if enc["input_ids"] == trace_ids else None
++        return prompt_ids, trace_ids, offsets
+     prompt = build_prompt(tokenizer, trace["problem"], trace.get("structured", False))
+     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+-    enc = tokenizer(trace["text"], add_special_tokens=False, return_offsets_mapping=True)
++    if selected_bos is not None:
++        bos = tokenizer.bos_token_id
++        if bos is None:
++            raise ValueError("Cannot apply BOS policy: tokenizer has no BOS token")
++        n = next((i for i, tok in enumerate(prompt_ids) if tok != bos), len(prompt_ids))
++        if n == 0:
++            raise ValueError("Rendered legacy prompt has no leading BOS; investigate template")
++        prompt_ids = [bos] * selected_bos + prompt_ids[n:]
+     return prompt_ids, enc["input_ids"], enc["offset_mapping"]
+ 
+ 
+@@ -178,6 +212,8 @@
+     # fed in chunks with a kv cache rather than one forward: a 30k-token sequence makes
+     # attention allocate seq x seq, which OOMs a T4. causal attention makes this identical.
+     # model.model skips the lm_head; the logits would be a huge tensor we never look at
++    if any(type(i) is not int or not 0 <= i < len(trace_ids) for i in token_idx):
++        raise ValueError("Activation token index is outside the supplied trace prefix")
+     ids = prompt_ids + trace_ids
+     picks = [len(prompt_ids) + i for i in token_idx]
+     want = set(picks)
+@@ -245,6 +281,8 @@
+ 
+ def verify(tokenizer, model, device, traces, parts_dir, mode, n_verify, adopt, seed=0):
+     # check a pre-manifest parts dir: re-extract a sample and compare
++    if adopt:
++        raise StaleCache("--adopt is disabled for extractor v3: cosine agreement cannot establish exact historical token/BOS provenance. Use --verify for diagnostics and --rebuild to write fresh input-bound activations.")
+     cfg, cfg_hash = config_fingerprint(tokenizer, device, mode)
+     print(f"verifying {parts_dir} against config {short(cfg_hash)} (mode {mode})\n", flush=True)
+ 
+@@ -256,7 +294,7 @@
+         else:
+             _, token_idx = segment(trace["text"], offsets)
+             feed = trace_ids
+-        want[n] = expect_part(trace, trace_ids, token_idx)
++        want[n] = expect_part(trace, trace_ids, token_idx, prompt_ids)
+         plan[n] = (prompt_ids, feed, token_idx)
+         part = f"{parts_dir}/{n}.npy"
+         if not os.path.exists(part):
+@@ -301,38 +339,7 @@
+               "result already computed from it should be treated as unverified.", flush=True)
+         return
+     print("the sampled parts reproduce a fresh forward pass", flush=True)
+-    if not adopt:
+-        print("re-run with --adopt to stamp a manifest so these parts can be reused")
+-        return
+-
+-    # back up a manifest describing a different config
+-    prior = manifest_path(parts_dir)
+-    if os.path.exists(prior):
+-        old = json.load(open(prior))
+-        if old.get("config_hash") != cfg_hash:
+-            backup = f"{prior}.replaced-{time.strftime('%Y%m%d-%H%M%S')}"
+-            os.rename(prior, backup)
+-            print(f"the existing manifest described config {short(old.get('config_hash', '?'))}; "
+-                  f"kept a copy at {backup}")
+-
+-    manifest = {
+-        "config_hash": cfg_hash,
+-        "config": cfg,
+-        "parts": {},
+-        # only verified_parts were compared; the rest are shape-checked
+-        "adopted": {
+-            "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+-            "verified_parts": sample,
+-            "n_verified": len(sample),
+-            "n_stamped": len(usable),
+-            "min_cosine": worst,
+-            "threshold": VERIFY_MIN_COS,
+-        },
+-    }
+-    for n in usable:
+-        stamp_part(manifest, n, f"{parts_dir}/{n}.npy", want[n])
+-    save_manifest(parts_dir, manifest)
+-    print(f"stamped {len(usable)} parts into {manifest_path(parts_dir)}", flush=True)
++    print("Diagnostic agreement does not establish exact historical inputs. Use --rebuild to create an input-bound cache.")
+ 
+ 
+ def fixed(tokenizer, model, device, traces, acts_path, meta_path, parts_dir, rebuild=False):
+@@ -342,13 +349,14 @@
+           flush=True)
+     save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves it readable
+ 
+-    ids, want, pos_by_n, reused, written = {}, {}, {}, 0, 0
++    ids, prompts, want, pos_by_n, reused, written = {}, {}, {}, {}, 0, 0
+     for n, trace in enumerate(traces):
+         prompt_ids, trace_ids, _ = encode(tokenizer, trace)
+         ids[n] = trace_ids
++        prompts[n] = prompt_ids
+         positions, token_idx, feed = fixed_positions(trace_ids)
+         pos_by_n[n] = positions
+-        want[n] = expect_part(trace, trace_ids, token_idx)
++        want[n] = expect_part(trace, trace_ids, token_idx, prompt_ids)
+         part = f"{parts_dir}/{n}.npy"
+         # reuse needs manifest proof: this trace, these indices, this config
+         why = part_ok(manifest["parts"].get(str(n)), part, want[n])
+@@ -396,6 +404,9 @@
+                     "prefix": prefix,
+                     "restarts": len(RESTART.findall(prefix)) / pos * 1000,
+                     "row": len(rows),
++                    "prefix_sha": sha_obj([prompts[n], ids[n][:pos]]),
++                    "n_bos": next((i for i, tok in enumerate(prompts[n]) if tok != tokenizer.bos_token_id), len(prompts[n])),
++                    "token_input_source": input_source(trace),
+                 }
+             )
+         acts.append(h)
+@@ -422,11 +433,12 @@
+     save_manifest(parts_dir, manifest)  # exists from the start, so a crash leaves it readable
+ 
+     # one file per trace so a crash or a colab disconnect costs one trace, not the run
+-    want, reused, written = {}, 0, 0
++    want, inputs, reused, written = {}, {}, 0, 0
+     for n, trace in enumerate(traces):
+         prompt_ids, trace_ids, offsets = encode(tokenizer, trace)
+         spans, token_idx = segment(trace["text"], offsets)
+-        want[n] = expect_part(trace, trace_ids, token_idx)
++        want[n] = expect_part(trace, trace_ids, token_idx, prompt_ids)
++        inputs[n] = (prompt_ids, trace_ids, token_idx)
+         part = f"{parts_dir}/{n}.npy"
+         # token_idx in the fingerprint, so resegmentation invalidates the part
+         why = part_ok(manifest["parts"].get(str(n)), part, want[n])
+@@ -453,6 +465,7 @@
+         if why is not None:
+             raise StaleCache(f"part {n} ({trace['trace_id']}) failed validation at assembly: {why}")
+         h = np.load(part)
++        prompt_ids, trace_ids, token_idx = inputs[n]
+         for step in range(len(h)):
+             rows.append(
+                 {
+@@ -463,6 +476,8 @@
+                     "is_correct": trace["is_correct"],
+                     "answer": trace["answer"],
+                     "row": len(rows),
++                    "prefix_sha": sha_obj([prompt_ids, trace_ids[:token_idx[step] + 1]]),
++                    "token_input_source": input_source(trace),
+                 }
+             )
+         acts.append(h)
+@@ -484,13 +499,30 @@
+                         help="re-extract a sample and compare it against the cached parts")
+     parser.add_argument("--verify-n", type=int, default=VERIFY_N)
+     parser.add_argument("--adopt", action="store_true",
+-                        help="with --verify: stamp a manifest onto a cache that reproduced")
++                        help="disabled for v3: approximate verification cannot certify historical token inputs")
+     parser.add_argument("--rebuild", action="store_true",
+                         help="set a mismatched cache aside and extract again")
++    parser.add_argument("--bos-policy", help="Explicit trace-ID-keyed legacy BOS policy JSON bound to the source trace file; never inferred automatically")
+     args = parser.parse_args()
++    if args.adopt:
++        parser.error("--adopt is disabled for v3; use --verify for diagnostics or --rebuild for fresh input-bound activations")
+ 
+     traces_path, acts_path, meta_path, parts_dir = paths(args.tag)
+     traces = [json.loads(line) for line in open(traces_path)]
++    if len({t["trace_id"] for t in traces}) != len(traces):
++        raise ValueError("Duplicate trace IDs; resolve them before activation extraction")
++    if args.bos_policy:
++        policy = json.load(open(args.bos_policy))
++        if policy.get("traces_sha256") != sha_file(traces_path) or not policy.get("basis"):
++            raise ValueError("BOS policy lacks a basis or belongs to a different source file")
++        mapping = policy.get("traces", {})
++        if set(mapping) != {t["trace_id"] for t in traces} or any(type(v) is not int or v not in (1, 2) for v in mapping.values()):
++            raise ValueError("BOS policy must map exactly every source trace ID to integer 1 or 2")
++        for t in traces:
++            t["n_bos"] = mapping[t["trace_id"]]
++    legacy = sum("token_input_provenance" not in t for t in traces)
++    if legacy:
++        print(f"WARNING: {legacy} text-only traces use reconstructed inputs; historical generation-token identity is unverified. Explicit BOS policy: {bool(args.bos_policy)}", flush=True)
+     n_trunc = sum(t["trunc"] for t in traces)
+     print(f"truncated {n_trunc}/{len(traces)} ({n_trunc / len(traces):.1%}), counted as incorrect", flush=True)
+     for t in traces:
+--- a/src/generate.py
++++ b/src/generate.py
+@@ -6,6 +6,7 @@
+ from datasets import load_dataset
+ from math_verify import parse, verify
+ from transformers import AutoModelForCausalLM, AutoTokenizer
++from cache import sha_obj
+ 
+ MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+ OUT_PATH = "data/traces.jsonl"
+@@ -107,9 +108,94 @@
+     return todo
+ 
+ 
+-def record(p, args, k, text, n_gen):
++def tokenizer_identity(tokenizer):
++    """Identity of the tokenizer actually used, not only its mutable model name."""
++    backend = getattr(tokenizer, "backend_tokenizer", None)
++    backend_config = json.loads(backend.to_str()) if backend is not None else None
++    if backend_config is not None:
++        # Fast-tokenizer calls persist these execution settings. Batch generation
++        # may enable padding while extraction tokenizes single unpadded strings.
++        # Neither setting changes the recorded nonpadding input IDs themselves.
++        backend_config.pop("padding", None)
++        backend_config.pop("truncation", None)
++    return sha_obj({
++        "name": getattr(tokenizer, "name_or_path", ""),
++        "vocab": tokenizer.get_vocab(),
++        "backend": backend_config,
++        # HF generation may alias an existing EOS token as PAD. Vocabulary and
++        # backend added-token entries still detect actual token changes.
++        "special_tokens": {k: str(v) for k, v in getattr(tokenizer, "special_tokens_map", {}).items()
++                           if k != "pad_token"},
++        "chat_template": getattr(tokenizer, "chat_template", None),
++    })
++
++
++def token_source_sha(trace):
++    return sha_obj({"problem": trace["problem"], "text": trace["text"],
++                    "structured": trace.get("structured", False)})
++
++
++def _token_list(ids, name):
++    if not isinstance(ids, list) or any(type(i) is not int or i < 0 for i in ids):
++        raise ValueError(f"{name} must be an ordered list of nonnegative integer token IDs")
++    return ids
++
++
++def attach_token_inputs(trace, tokenizer, prompt_ids, completion_ids):
++    """Save actual generation IDs. Text-span IDs exclude a terminal EOS only."""
++    prompt_ids = _token_list(list(prompt_ids), "prompt_token_ids")
++    completion_ids = _token_list(list(completion_ids), "completion_token_ids")
++    generated_ids = completion_ids[:]
++    if generated_ids and generated_ids[-1] == tokenizer.eos_token_id:
++        generated_ids.pop()
++    if tokenizer.decode(generated_ids, skip_special_tokens=True) != trace["text"]:
++        raise ValueError("Actual generation token IDs do not decode to the saved text; do not retokenize to hide this mismatch")
++    trace.update(prompt_token_ids=prompt_ids, generated_token_ids=generated_ids,
++                 completion_token_ids=completion_ids)
++    trace["token_input_provenance"] = {
++        "schema": 1, "capture": "recorded_at_generation", "source_sha": token_source_sha(trace),
++        "tokenizer_sha": tokenizer_identity(tokenizer),
++        "prefix_sha": sha_obj([prompt_ids, generated_ids]),
++        "text_token_convention": "actual completion IDs excluding terminal EOS",
++    }
++    return trace
++
++
++def recorded_token_inputs(tokenizer, trace):
++    """Return validated recorded IDs, or None for legacy text-only records.
++
++    These hashes detect changed records; they do not authenticate historical data
++    if someone reconstructs IDs and fabricates a provenance record after the fact.
++    """
++    keys = ("prompt_token_ids", "generated_token_ids", "completion_token_ids", "token_input_provenance")
++    present = [k in trace for k in keys]
++    if not any(present):
++        return None
++    if not all(present):
++        raise ValueError(f"{trace.get('trace_id')}: incomplete recorded-token provenance")
++    prompt = _token_list(trace["prompt_token_ids"], "prompt_token_ids")
++    generated = _token_list(trace["generated_token_ids"], "generated_token_ids")
++    completion = _token_list(trace["completion_token_ids"], "completion_token_ids")
++    provenance = trace["token_input_provenance"]
++    if not prompt or not isinstance(provenance, dict) or provenance.get("schema") != 1 or provenance.get("capture") != "recorded_at_generation":
++        raise ValueError("Unknown or incomplete token provenance")
++    expected = completion[:-1] if completion and completion[-1] == tokenizer.eos_token_id else completion
++    if generated != expected:
++        raise ValueError("Text-span token IDs disagree with the recorded completion")
++    if provenance.get("source_sha") != token_source_sha(trace):
++        raise ValueError("Recorded tokens belong to different problem/text/formatting")
++    if provenance.get("tokenizer_sha") != tokenizer_identity(tokenizer):
++        raise ValueError("Recorded tokens were produced with a different tokenizer")
++    if provenance.get("prefix_sha") != sha_obj([prompt, generated]):
++        raise ValueError("Recorded ordered token IDs changed")
++    if tokenizer.decode(generated, skip_special_tokens=True) != trace["text"]:
++        raise ValueError("Recorded token IDs do not decode to saved text")
++    return prompt[:], generated[:]
++
++
++def record(p, args, k, text, n_gen, *, tokenizer=None, prompt_ids=None, completion_ids=None):
+     answer = extract_boxed(text)
+-    return {
++    trace = {
+         "trace_id": f"{p['problem_id']}_{k}",
+         "problem_id": p["problem_id"],
+         "uid": p["unique_id"],
+@@ -125,6 +211,9 @@
+         # extract.py rebuilds this prompt
+         "structured": args.structured,
+     }
++    if tokenizer is not None:
++        return attach_token_inputs(trace, tokenizer, prompt_ids, completion_ids)
++    return trace
+ 
+ 
+ def summarise(path):
+@@ -192,7 +281,10 @@
+                 eos = (gen == tokenizer.eos_token_id).nonzero()
+                 n_gen = eos[0, 0].item() if len(eos) else len(gen)
+                 text = tokenizer.decode(gen[:n_gen], skip_special_tokens=True)
+-                out_file.write(json.dumps(record(p, args, k, text, n_gen)) + "\n")
++                prompt_ids = enc["input_ids"][i][enc["attention_mask"][i].bool()].tolist()
++                completion_ids = gen[:n_gen + (1 if len(eos) else 0)].tolist()
++                out_file.write(json.dumps(record(p, args, k, text, n_gen, tokenizer=tokenizer,
++                                                prompt_ids=prompt_ids, completion_ids=completion_ids)) + "\n")
+         out_file.flush()
+         print(f"{min(start + args.bs, len(todo))}/{len(todo)}", flush=True)
+     out_file.close()
+--- a/src/generate_vllm.py
++++ b/src/generate_vllm.py
+@@ -33,8 +33,12 @@
+         batch = todo[start : start + CHUNK]
+         prompts = [build_prompt(tokenizer, p["problem"], args.structured) for p in batch]
+         for p, out in zip(batch, llm.generate(prompts, params)):
++            if out.prompt_token_ids is None:
++                raise ValueError("vLLM did not expose the actual prompt IDs; cannot record trace provenance")
+             for k, o in enumerate(out.outputs):
+-                out_file.write(json.dumps(record(p, args, k, o.text, len(o.token_ids))) + "\n")
++                out_file.write(json.dumps(record(p, args, k, o.text, len(o.token_ids), tokenizer=tokenizer,
++                                                prompt_ids=list(out.prompt_token_ids),
++                                                completion_ids=list(o.token_ids))) + "\n")
+         out_file.flush()
+         print(f"{min(start + CHUNK, len(todo))}/{len(todo)}", flush=True)
+     out_file.close()
+--- a/src/probe_cmp/ceiling.py
++++ b/src/probe_cmp/ceiling.py
+@@ -1,7 +1,6 @@
+ # recoverability next to the probes, on identical traces. r(t) = P(final answer correct | prefix)
+-# under the model's own sampling; the true r(t) is the theoretical ceiling for any prefix-only
+-# predictor. r_hat, the share of K sampled continuations that end correct, is only a noisy
+-# estimate of it: with K=8, ties and binomial noise pull its AUROC toward 0.5.
++# under the model's own sampling. r_hat, the share of K sampled continuations that end correct,
++# is a noisy empirical rollout benchmark; its observed AUROC is not a proven ceiling or bound.
+ # also: answer agreement (continuations reaching the source trace's own final answer), whether each
+ # cut already holds the answer (from meta's stored prefix text), and a raw restart-count baseline.
+ # every AUROC uses probe_cmp's own stats (pair-weighted, problem-clustered bootstrap, draws shared
+@@ -21,23 +20,82 @@
+ N_BOOT = 2000
+ 
+ 
++def strict_json(line):
++    def unique_keys(pairs):
++        out = {}
++        for key, value in pairs:
++            if key in out:
++                raise ValueError(f"Duplicate JSON key: {key}")
++            out[key] = value
++        return out
++
++    def reject_constant(value):
++        raise ValueError(f"Non-finite JSON constant: {value}")
++
++    return json.loads(line, object_pairs_hook=unique_keys, parse_constant=reject_constant)
++
++
+ def load_rollouts(path):
+-    # one row per (prefix, round) holding its samples; rounds pool, a rewritten sample keeps the last
+-    last, torn = {}, 0
+-    for line in open(path):
+-        if not line.strip():
+-            continue
++    # Pool disjoint rounds; resumed identical samples count once. A changed sample
++    # or interior corruption must never silently overwrite evidence.
++    last, torn, identities, configs = {}, 0, {}, set()
++    with open(path) as handle:
++        lines = [(i, line) for i, line in enumerate(handle, 1) if line.strip()]
++    for offset, (number, line) in enumerate(lines):
+         try:
+-            r = json.loads(line)
+-        except json.JSONDecodeError:
+-            torn += 1  # a half-written last line from an interrupted run
+-            continue
++            r = strict_json(line)
++        except json.JSONDecodeError as exc:
++            if offset == len(lines) - 1 and not line.endswith("\n"):
++                torn += 1  # only an unfinished final line can be an interrupted append
++                continue
++            raise ValueError(f"{path}:{number}: malformed JSON inside the rollout file; quarantine explicitly before analysis") from exc
++        if not isinstance(r, dict) or not isinstance(r.get("samples"), list) or not r["samples"]:
++            raise ValueError(f"{path}:{number}: expected a nonempty rollout record")
++        required = {"prefix_id", "round", "problem_id", "trace_id", "checkpoint"}
++        if not required <= r.keys() or type(r["round"]) is not int or r["round"] < 0:
++            raise ValueError(f"{path}:{number}: missing or invalid rollout identifiers")
++        if r["checkpoint"] not in set(CKPTS) | {"t0"}:
++            raise ValueError(f"{path}:{number}: unknown checkpoint {r['checkpoint']!r}")
++        if "cut_token_idx" in r:
++            expected_cut = 0 if r["checkpoint"] == "t0" else int(CKPTS[r["checkpoint"]])
++            if r["cut_token_idx"] != expected_cut:
++                raise ValueError(f"{path}:{number}: checkpoint and token cut disagree")
++        if "n" in r and r["n"] != len(r["samples"]):
++            raise ValueError(f"{path}:{number}: declared sample count disagrees")
++        identity = {k: r.get(k) for k in ("problem_id", "trace_id", "checkpoint", "cut_token_idx",
++                                         "prefix_sha", "config_hash", "prefix_definition_sha",
++                                         "gold_answer", "max_tokens")}
++        if r["prefix_id"] in identities and identities[r["prefix_id"]] != identity:
++            raise ValueError(f"{path}:{number}: conflicting metadata/input hash for {r['prefix_id']}")
++        identities[r["prefix_id"]] = identity
++        if r.get("config_hash"):
++            configs.add(r["config_hash"])
++            if len(configs) > 1:
++                raise ValueError("Rollout records use different sampling configurations")
++        indices = []
+         for s in r["samples"]:
+-            last[(r["prefix_id"], r["round"], s["sample_idx"])] = (r, s)
++            if not isinstance(s, dict) or type(s.get("sample_idx")) is not int or s["sample_idx"] < 0:
++                raise ValueError(f"{path}:{number}: invalid sample index")
++            if type(s.get("correct")) is not bool or type(s.get("truncated")) is not bool:
++                raise ValueError(f"{path}:{number}: correctness/truncation must be booleans")
++            if s["correct"] and s["truncated"]:
++                raise ValueError(f"{path}:{number}: a capped continuation cannot be counted correct")
++            indices.append(s["sample_idx"])
++            key = (r["prefix_id"], r["round"], s["sample_idx"])
++            if key in last and last[key][1] != s:
++                raise ValueError(f"{path}:{number}: conflicting repeated rollout sample {key}")
++            last[key] = (r, s)
++        if len(set(indices)) != len(indices):
++            raise ValueError(f"{path}:{number}: duplicate sample indices within one record")
++        if "n" in r and sorted(indices) != list(range(r["n"])):
++            raise ValueError(f"{path}:{number}: sample indices must cover 0 through n-1")
++    if not last:
++        raise ValueError("No complete rollout samples were found")
+     rows = {}
+     for (pid, _, _), (r, s) in last.items():
+         d = rows.setdefault(pid, {"prefix_id": pid, "problem_id": r["problem_id"], "trace_id": r["trace_id"],
+-                                  "checkpoint": r["checkpoint"], "n": 0, "k": 0, "n_trunc": 0,
++                                  "checkpoint": r["checkpoint"], "prefix_sha": r.get("prefix_sha"),
++                                  "n": 0, "k": 0, "n_trunc": 0,
+                                   "n_from_prefix": 0, "answers": []})
+         d["n"] += 1
+         d["k"] += bool(s["correct"])
+@@ -45,6 +103,13 @@
+         d["n_from_prefix"] += bool(s.get("answer_from_prefix"))
+         d["answers"].append(s.get("answer"))
+     df = pd.DataFrame(list(rows.values()))
++    active = df.trace_id.notna()
++    if df.loc[active].duplicated(["trace_id", "checkpoint"]).any():
++        raise ValueError("Multiple prefix IDs refer to the same source trace/checkpoint")
++    if df.loc[~active].duplicated(["problem_id", "checkpoint"]).any():
++        raise ValueError("Multiple t0 prefix IDs refer to the same problem")
++    if (active & (df.checkpoint == "t0")).any() or ((~active) & (df.checkpoint != "t0")).any():
++        raise ValueError("Source trace IDs must be present for fixed cuts and absent for t0")
+     df["r"] = df.k / df.n
+     # truncated continuations are never correct; this drops them from the denominator instead
+     df["r_finished"] = (df.k / (df.n - df.n_trunc).replace(0, np.nan)).fillna(df.r)
+@@ -52,7 +117,12 @@
+ 
+ 
+ def load_traces(path):
+-    t = pd.DataFrame(json.loads(line) for line in open(path)).set_index("trace_id", drop=False)
++    with open(path) as handle:
++        t = pd.DataFrame(strict_json(line) for line in handle if line.strip()).set_index("trace_id", drop=False)
++    if t.index.duplicated().any():
++        raise ValueError("Duplicate source trace IDs")
++    if not t.is_correct.map(lambda x: type(x) is bool).all():
++        raise ValueError("Source correctness labels must be booleans")
+     t["y"] = (~t.is_correct.astype(bool)).astype(int)  # 1 = wrong, as in probe_cmp
+     return t
+ 
+@@ -93,7 +163,9 @@
+ 
+ 
+ def load_meta(path):
+-    m = pd.read_parquet(path, columns=["trace_id", "pos", "prefix", "restarts"])
++    m = pd.read_parquet(path)
++    if m.duplicated(["trace_id", "pos"]).any():
++        raise ValueError("Repeated (trace, position) metadata rows")
+     m["pos"] = m.pos.astype(int)
+     return m.set_index(["trace_id", "pos"])
+ 
+@@ -223,6 +295,12 @@
+     os.makedirs(out, exist_ok=True)
+     roll = roll.copy()
+     has = roll.trace_id.notna()
++    unknown = set(roll.loc[has, "trace_id"]) - set(traces.index)
++    if unknown:
++        raise ValueError(f"Rollouts refer to unknown source traces: {sorted(unknown)[:5]}")
++    if not np.array_equal(roll.loc[has, "problem_id"].values, traces.loc[roll.loc[has, "trace_id"], "problem_id"].values):
++        raise ValueError("Rollout/source problem IDs disagree")
++    alignment = "UNVERIFIED: extraction/rollout input hashes unavailable"
+     roll["y"] = np.where(has, traces.reindex(roll.trace_id.fillna("")).y.values, np.nan)
+     # answer agreement: continuations whose final answer is the source trace's own final answer
+     src_ans = traces.reindex(roll.trace_id.fillna("")).answer.values
+@@ -235,6 +313,19 @@
+         miss = [k for k, f, h in zip(keys, found, has) if h and not f]
+         if miss:
+             raise SystemExit(f"{len(miss)} cuts have no meta row (e.g. {miss[:3]}); pass the meta the probes used")
++        if "prefix_sha" in meta.columns and "prefix_sha" in roll.columns:
++            verified = 0
++            for key, active, saved_hash in zip(keys, has, roll.prefix_sha):
++                if not active:
++                    continue
++                meta_hash = meta.at[key, "prefix_sha"]
++                if pd.isna(meta_hash) or pd.isna(saved_hash):
++                    continue
++                if meta_hash != saved_hash:
++                    raise ValueError(f"Extraction/rollout input hashes disagree at {key}; BOS or token inputs differ")
++                verified += 1
++            if verified == int(has.sum()) and verified:
++                alignment = "RECORDED_INPUT_HASHES_MATCH: numerical activation provenance still requires its cache manifest"
+         flags = [answer_flags(meta.at[k, "prefix"], s) if h else (np.nan, np.nan)
+                  for k, s, h in zip(keys, src_ans, has)]
+         roll["committed"] = [f[0] for f in flags]
+@@ -279,16 +370,18 @@
+             res["tied_pairs_under_r_hat"] = ties
+             results.append(res)
+     allr = pd.concat(results, ignore_index=True)
++    allr["input_alignment_status"] = alignment
+     allr.to_csv(os.path.join(out, "ceiling_vs_probe.csv"), index=False)
+ 
+     f = lambda v, lo, hi, sgn=False: (f"{v:+.3f} [{lo:+.3f}, {hi:+.3f}]" if sgn else f"{v:.3f} [{lo:.3f}, {hi:.3f}]")
+     lines = ["# Recoverability (r_hat) vs probes, within problem, identical traces\n",
++             "- Input alignment: " + alignment + ". Matching trace IDs alone does not verify BOS/token identity.",
+              "- Orientation: P(wrong); AUROC over each problem's correct x wrong pairs, pair-weighted. "
+              "r_hat score = 1 - r_hat. CIs: problem-clustered bootstrap, draws shared by every row of a "
+              "checkpoint, so deltas are paired.",
+-             "- The true recovery probability r(t) is the theoretical ceiling. r_hat is its estimate from K "
+-             "sampled continuations; ties and binomial noise pull its AUROC toward 0.5, so it understates "
+-             "the ceiling. `r_hat finished` drops truncated continuations from the denominator.",
++             "- r_hat is estimated from K sampled continuations and is a noisy empirical rollout benchmark, "
++             "not a proven upper or lower bound on probe AUROC. `r_hat finished` drops truncated "
++             "continuations from the denominator.",
+              "- `restart density (raw)` is the unfitted rate of 'wait / hold on / let me re- / actually' per "
+              "1000 tokens of the cut (taxonomy.RESTART), a self-correction proxy; higher = P(wrong).",
+              "- The 'before the answer' variants keep only cuts that do not yet hold the answer; each "
+--- a/src/recovery/build_prefixes.py
++++ b/src/recovery/build_prefixes.py
+@@ -5,7 +5,7 @@
+ import numpy as np
+ 
+ from common import (MAX_NEW, OUT_DIR, canonical, encode_trace, load_tokenizer, prompt_ids,
+-                    build_prompt)
++                    build_prompt, load_bos_policy, trace_inputs)
+ from generate import out_path
+ 
+ FRACTIONS = {"f25": 0.25, "f50": 0.50, "f75": 0.75}
+@@ -135,7 +135,18 @@
+         "prefix_gen_token_ids": gen_ids,
+         "max_tokens": MAX_NEW - cut,
+         "edit_meta": None,
++        "token_input_provenance": problem.get("_token_provenance", "reconstructed_legacy_unverified"),
++        "source_traces_sha256": problem.get("_traces_sha256"),
+     }
++
++
++def problem_prompt(tokenizer, traces, policy):
++    # One shared t0 is meaningful only when the source prompts are identical.
++    inputs = [trace_inputs(tokenizer, t, policy) for t in traces]
++    if len({tuple(p) for p, _, _, _ in inputs}) != 1:
++        raise ValueError(f"Problem {traces[0]['problem_id']} has different source prompts/BOS policies; a shared t0 is ambiguous")
++    labels = sorted({v for _, _, _, v in inputs})
++    return inputs[0][0], "+".join(labels)
+ 
+ 
+ def ceiling_population(traces, lens, min_len):
+@@ -181,9 +192,10 @@
+ 
+ def build_ceiling(args, tokenizer, traces):
+     lens, enc = {}, {}
++    policy = getattr(args, "bos_policy_data", None)
+     for t in traces:
+         if not t["trunc"] and t["n_gen"] < MAX_NEW:
+-            enc[t["trace_id"]] = encode_trace(tokenizer, t["text"])[0]
++            enc[t["trace_id"]] = trace_inputs(tokenizer, t, policy)[1]
+         lens[t["trace_id"]] = len(enc[t["trace_id"]]) if t["trace_id"] in enc else 0
+     pop = ceiling_population(traces, lens, max(args.positions))
+     n_traces = sum(map(len, pop.values()))
+@@ -198,13 +210,10 @@
+     per_problem, units = {}, {}
+     for pid, ts in pop.items():
+         problem = dict(ts[0])
+-        problem["_prompt"] = build_prompt(tokenizer, problem["problem"])
+-        p_ids = prompt_ids(tokenizer, problem["problem"])
+-        if p_ids[:2] != [tokenizer.bos_token_id] * 2:
+-            raise AssertionError(f"problem {pid}: prompt opens {p_ids[:3]}, not two BOS "
+-                                 f"({tokenizer.bos_token_id}) as tag-B was sampled; check the "
+-                                 f"transformers version ({type(tokenizer).__name__})")
++        problem["_prompt"] = build_prompt(tokenizer, problem["problem"], problem.get("structured", False))
+         everyone = by_problem[pid]
++        p_ids, problem["_token_provenance"] = problem_prompt(tokenizer, everyone, policy)
++        problem["_traces_sha256"] = getattr(args, "traces_sha256", None)
+         pass_k, pass_n = sum(t["is_correct"] for t in everyone), len(everyone)
+         recs = [record(f"ceil/{pid}/t0", None, problem, "t0", 0, 0, p_ids, [], pass_k, pass_n)]
+         for trace in ts:
+@@ -263,6 +272,7 @@
+     parser.add_argument("--seed", type=int, default=0)
+     parser.add_argument("--out", default=f"{OUT_DIR}/prefixes.jsonl")
+     parser.add_argument("--force", action="store_true", help="overwrite an existing --out")
++    parser.add_argument("--bos-policy", help="Trace-ID BOS JSON bound to source SHA256; legacy defaults otherwise remain unverified")
+     args = parser.parse_args()
+     if os.path.exists(args.out) and not args.force:
+         raise SystemExit(f"{args.out} exists; rollouts are keyed to it. --force to overwrite")
+@@ -272,6 +282,14 @@
+     if args.data_dir:
+         path = os.path.join(args.data_dir, os.path.basename(path))
+     traces = [json.loads(line) for line in open(path)]
++    tids = [t["trace_id"] for t in traces]
++    if len(tids) != len(set(tids)):
++        raise ValueError("Duplicate source trace IDs")
++    from cache import sha_file
++    args.traces_sha256 = sha_file(path)
++    args.bos_policy_data = load_bos_policy(args.bos_policy, traces, path)
++    if args.bos_policy_data is None:
++        print("No historical BOS policy supplied: reconstructed legacy prompts remain UNVERIFIED; saved generation inputs are preferred when available.")
+     if args.design == "ceiling":
+         records = build_ceiling(args, tokenizer, traces)
+         os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+@@ -288,7 +306,7 @@
+         elif t["answer"] is None:
+             why["no final answer"] += 1
+         else:
+-            ids, offsets = encode_trace(tokenizer, t["text"])
++            _, ids, offsets, _ = trace_inputs(tokenizer, t, args.bos_policy_data, need_offsets=True)
+             if canonical(t, ids):
+                 enc[t["trace_id"]] = (ids, offsets)
+             else:
+@@ -305,9 +323,10 @@
+     records, dropped, shared = [], Counter(), 0
+     for i in range(0, len(chosen), 2):
+         problem = dict(chosen[i])
+-        problem["_prompt"] = build_prompt(tokenizer, problem["problem"])
+-        p_ids = prompt_ids(tokenizer, problem["problem"])
++        problem["_prompt"] = build_prompt(tokenizer, problem["problem"], problem.get("structured", False))
+         ts = by_problem[problem["problem_id"]]
++        p_ids, problem["_token_provenance"] = problem_prompt(tokenizer, ts, args.bos_policy_data)
++        problem["_traces_sha256"] = args.traces_sha256
+         pass_k, pass_n = sum(t["is_correct"] for t in ts), len(ts)
+         records.append(record(f"trunc/{problem['problem_id']}/t0", None, problem, "t0", 0, 0,
+                               p_ids, [], pass_k, pass_n))
+--- a/src/recovery/common.py
++++ b/src/recovery/common.py
+@@ -18,10 +18,61 @@
+     return AutoTokenizer.from_pretrained(MODEL)
+ 
+ 
+-def prompt_ids(tokenizer, problem):
+-    # vLLM tokenizes a string prompt with special tokens on, and the chat template
+-    # already emits BOS, so generation saw two. run_rollouts.py re-checks against vLLM.
+-    return tokenizer(build_prompt(tokenizer, problem))["input_ids"]
++def prompt_ids(tokenizer, problem, n_bos=None, structured=False):
++    # Legacy mode follows this tokenizer's defaults; it does NOT certify historical
++    # generation inputs. An explicit policy avoids version-dependent BOS insertion.
++    text = build_prompt(tokenizer, problem, structured)
++    if n_bos is None:
++        return tokenizer(text)["input_ids"]
++    if type(n_bos) is not int or n_bos not in (1, 2):
++        raise ValueError("n_bos must be 1 or 2")
++    ids = tokenizer(text, add_special_tokens=False)["input_ids"]
++    bos = tokenizer.bos_token_id
++    if len(ids) < 2 or ids[0] != bos or ids[1] == bos:
++        raise ValueError("Expected exactly one template BOS before applying the explicit policy")
++    return [bos] * (n_bos - 1) + ids
++
++
++def load_bos_policy(path, traces, source_path):
++    """Read an evidence-labelled trace-ID policy bound to the exact source bytes."""
++    if path is None:
++        return None
++    from cache import sha_file
++    with open(path) as handle:
++        policy = json.load(handle)
++    ids = [t["trace_id"] for t in traces]
++    values = policy.get("traces", {})
++    if len(set(ids)) != len(ids) or set(values) != set(ids):
++        raise ValueError("BOS policy must contain exactly the unique source trace IDs")
++    if policy.get("traces_sha256") != sha_file(source_path) or not policy.get("basis"):
++        raise ValueError("BOS policy needs the matching source SHA256 and an evidence basis")
++    if any(type(v) is not int or v not in (1, 2) for v in values.values()):
++        raise ValueError("BOS policy values must be integer 1 or 2")
++    return policy
++
++
++def trace_inputs(tokenizer, trace, policy=None, need_offsets=False):
++    """Prefer validated saved inputs; reconstruct legacy text with explicit provenance."""
++    from generate import recorded_token_inputs
++    saved = recorded_token_inputs(tokenizer, trace)
++    count = policy["traces"][trace["trace_id"]] if policy is not None else None
++    offsets = None
++    if saved is not None:
++        prompt, ids = saved
++        if count is not None:
++            actual = next((i for i, t in enumerate(prompt) if t != tokenizer.bos_token_id), len(prompt))
++            if actual != count:
++                raise ValueError(f"{trace['trace_id']}: saved prompt conflicts with BOS policy")
++        provenance = "recorded_at_generation"
++        if need_offsets:
++            encoded, offsets = encode_trace(tokenizer, trace["text"])
++            if list(encoded) != list(ids):
++                raise ValueError(f"{trace['trace_id']}: stored token IDs differ from offset tokenization; cannot snap checkpoints")
++    else:
++        prompt = prompt_ids(tokenizer, trace["problem"], count, trace.get("structured", False))
++        ids, offsets = encode_trace(tokenizer, trace["text"])
++        provenance = "reconstructed_explicit_bos_policy" if policy is not None else "reconstructed_legacy_unverified"
++    return list(prompt), list(ids), offsets, provenance
+ 
+ 
+ def encode_trace(tokenizer, text):
+@@ -30,6 +81,14 @@
+ 
+ 
+ def canonical(trace, ids):
++    provenance = trace.get("token_input_provenance")
++    if isinstance(provenance, dict) and provenance.get("capture") == "recorded_at_generation":
++        # trace_inputs validates provenance before this diagnostic. HF's n_gen
++        # excludes terminal EOS; vLLM's includes it. Exact saved IDs remove the
++        # need to guess their equality from that historical count convention.
++        generated, completion = trace.get("generated_token_ids"), trace.get("completion_token_ids")
++        return (isinstance(generated, list) and isinstance(completion, list)
++                and list(ids) == generated and trace["n_gen"] in (len(generated), len(completion)))
+     # token ids were never stored. vLLM's count includes EOS on a stop, not on a
+     # length cap; any other count means retokenizing the text drifted from the sample.
+     return trace["n_gen"] == len(ids) + (0 if trace["n_gen"] >= MAX_NEW else 1)
+--- a/src/recovery/run_rollouts.py
++++ b/src/recovery/run_rollouts.py
+@@ -15,7 +15,7 @@
+ VLLM_VERSION = "0.10.2"
+ LOG_SECONDS = 60
+ # one row per prefix holding its n samples; bumping this refuses files in an older layout
+-ROW_FORMAT = 3
++ROW_FORMAT = 4
+ SMOKE = {"limit": 2, "n": 2, "max_tokens_cap": 256}
+ # all-in $/h per GPU; --rate-usd-hr overrides
+ RATES = {"h100": 4.40, "h200": 4.99, "t4": 1.05}
+@@ -69,6 +69,62 @@
+     return sha_obj([rec["prompt_token_ids"], rec["prefix_gen_token_ids"]])
+ 
+ 
++def prefix_definition_sha(rec):
++    # Token equality alone does not establish an identical experiment: the
++    # continuation budget and gold answer determine its sampling and grading.
++    return sha_obj({"prefix_sha": prefix_sha(rec), "max_tokens": rec["max_tokens"],
++                    "gold_answer": rec["gold_answer"]})
++
++
++def validate_prefixes(prefixes):
++    """Check the IDs actually fed to vLLM, without certifying historical tokens."""
++    seen = set()
++    for rec in prefixes:
++        pid = rec.get("prefix_id")
++        if not isinstance(pid, str) or not pid or pid in seen:
++            raise StaleCache(f"Missing/duplicate prefix_id: {pid!r}")
++        seen.add(pid)
++        for name in ("prompt_token_ids", "prefix_gen_token_ids"):
++            ids = rec.get(name)
++            if not isinstance(ids, list) or any(type(i) is not int or i < 0 for i in ids):
++                raise StaleCache(f"{pid}: invalid {name}")
++        if not rec["prompt_token_ids"]:
++            raise StaleCache(f"{pid}: empty prompt")
++        cut = rec.get("cut_token_idx")
++        if type(cut) is not int or cut != len(rec["prefix_gen_token_ids"]):
++            raise StaleCache(f"{pid}: cut_token_idx must equal the number of kept generated tokens")
++        ckpt = rec.get("checkpoint")
++        if not isinstance(ckpt, str) or not ckpt:
++            raise StaleCache(f"{pid}: missing checkpoint")
++        if ckpt.startswith("p") and ckpt[1:].isdigit() and int(ckpt[1:]) != cut:
++            raise StaleCache(f"{pid}: fixed checkpoint disagrees with its token cut")
++        if ckpt == "t0" and (cut or rec.get("trace_id") is not None):
++            raise StaleCache(f"{pid}: t0 must have zero generated tokens and no trace_id")
++        if ckpt != "t0" and not isinstance(rec.get("trace_id"), str):
++            raise StaleCache(f"{pid}: trace checkpoint needs a trace_id")
++        if rec.get("problem_id") is None or type(rec.get("max_tokens")) is not int or rec["max_tokens"] <= 0:
++            raise StaleCache(f"{pid}: invalid problem_id or continuation budget")
++        if not isinstance(rec.get("gold_answer"), str) or not rec["gold_answer"].strip():
++            raise StaleCache(f"{pid}: missing or invalid gold answer for continuation grading")
++    return prefixes
++
++
++def read_prefixes(path):
++    # Unlike append-only rollout output, the completed prefix definition file must
++    # not silently lose an incomplete last record.
++    with open(path) as handle:
++        prefixes = [json.loads(line) for line in handle if line.strip()]
++    return validate_prefixes(prefixes)
++
++
++def check_paths(prefix_path, output_path):
++    # Sidecars must not replace either the prefix file or the output file.
++    names = [prefix_path, output_path, f"{output_path}.config.json", f"{output_path}.ledger.json"]
++    resolved = [os.path.realpath(p) for p in names]
++    if len(set(resolved)) != len(resolved):
++        raise StaleCache("Prefix, rollout, config and ledger paths must be distinct")
++
++
+ def check_config(path, cfg):
+     # rows pool across runs only under one sampling config
+     cfg_hash = sha_obj(cfg)
+@@ -104,20 +160,76 @@
+         if data.endswith(b"\n"):
+             return 0
+         keep = data.rfind(b"\n") + 1
++        # A valid final JSON record without newline is complete, not a torn write.
++        try:
++            json.loads(data[keep:])
++        except (json.JSONDecodeError, UnicodeDecodeError):
++            # Preserve the fragment for investigation before recovering appendability.
++            backup = f"{path}.torn_tail.{__import__('hashlib').sha256(data[keep:]).hexdigest()[:16]}.bin"
++            if not os.path.exists(backup):
++                with open(backup, "wb") as audit:
++                    audit.write(data[keep:])
++        else:
++            f.seek(0, os.SEEK_END)
++            f.write(b"\n")
++            return 0
+         f.truncate(keep)
+         return len(data) - keep
+ 
+ 
+-def done_rows(path, prefixes):
+-    # {(prefix_id, round)}; a done prefix whose tokens changed is a stale file
+-    by_id = {r["prefix_id"]: r for r in prefixes}
+-    done = set()
++def done_rows(path, prefixes, config_hash=None, base_seed=None, max_tokens_cap=None):
++    # {(prefix_id, round)}. A configured resume requires the new budget/gold
++    # binding; config_hash=None permits read-only legacy status inspection only.
++    by_id = {r["prefix_id"]: r for r in validate_prefixes(prefixes)}
++    done, fingerprints = set(), {}
+     for row in read_jsonl(path):
+-        rec = by_id.get(row["prefix_id"])
+-        if rec is not None and prefix_sha(rec) != row["prefix_sha"]:
++        rec = by_id.get(row.get("prefix_id"))
++        if rec is None:
++            raise StaleCache(f"Unknown prefix in existing rollouts: {row.get('prefix_id')!r}")
++        if prefix_sha(rec) != row.get("prefix_sha"):
+             raise StaleCache(f"{row['prefix_id']}: prefix tokens differ from those {path} "
+                              "was sampled on; use a new --out")
+-        done.add((row["prefix_id"], row["round"]))
++        definition = row.get("prefix_definition_sha")
++        if definition is None:
++            if config_hash is not None:
++                raise StaleCache(f"{row['prefix_id']}: legacy row lacks its continuation-budget/"
++                                 "gold-answer binding; use a new --out, do not retrofit a manifest")
++        elif definition != prefix_definition_sha(rec):
++            raise StaleCache(f"{row['prefix_id']}: continuation budget or gold answer changed; "
++                             "use a new --out")
++        if definition is not None and row.get("gold_answer") != rec["gold_answer"]:
++            raise StaleCache(f"{row['prefix_id']}: saved gold answer conflicts with prefix file")
++        if max_tokens_cap is not None:
++            expected_cap = min(rec["max_tokens"], max_tokens_cap) if max_tokens_cap else rec["max_tokens"]
++            if type(row.get("max_tokens")) is not int or row["max_tokens"] != expected_cap:
++                raise StaleCache(f"{row['prefix_id']}: saved effective continuation budget differs")
++        for field in ("problem_id", "trace_id", "checkpoint", "cut_token_idx"):
++            if row.get(field) != rec.get(field):
++                raise StaleCache(f"{row['prefix_id']}: saved {field} conflicts with prefix file")
++        if type(row.get("round")) is not int or row["round"] < 0:
++            raise StaleCache(f"{row['prefix_id']}: invalid round")
++        if config_hash is not None and row.get("config_hash") != config_hash:
++            raise StaleCache(f"{row['prefix_id']}: saved sampling config differs")
++        if base_seed is not None and row.get("seed") != prefix_seed(base_seed, row["prefix_id"], row["round"]):
++            raise StaleCache(f"{row['prefix_id']}: saved seed differs from requested base seed")
++        samples, n = row.get("samples"), row.get("n")
++        if not isinstance(samples, list) or type(n) is not int or n <= 0 or len(samples) != n:
++            raise StaleCache(f"{row['prefix_id']}: incomplete sample group")
++        if any(not isinstance(s, dict) or type(s.get("sample_idx")) is not int for s in samples):
++            raise StaleCache(f"{row['prefix_id']}: invalid sample index")
++        if sorted(s["sample_idx"] for s in samples) != list(range(n)):
++            raise StaleCache(f"{row['prefix_id']}: duplicate/missing sample index")
++        if any(type(s.get("correct")) is not bool or type(s.get("truncated")) is not bool for s in samples):
++            raise StaleCache(f"{row['prefix_id']}: nonboolean outcome/truncation label")
++        if "prompt_token_ids" in row or "prefix_gen_token_ids" in row:
++            if row.get("prompt_token_ids") != rec["prompt_token_ids"] or row.get("prefix_gen_token_ids") != rec["prefix_gen_token_ids"]:
++                raise StaleCache(f"{row['prefix_id']}: recorded input IDs differ")
++        key = (row["prefix_id"], row["round"])
++        fingerprint = sha_obj(row)
++        if key in fingerprints and fingerprints[key] != fingerprint:
++            raise StaleCache(f"Conflicting repeated rollout row: {key}")
++        fingerprints[key] = fingerprint
++        done.add(key)
+     return done
+ 
+ 
+@@ -141,18 +253,22 @@
+ 
+ 
+ def check_prompts(llm, make_params, recs):
+-    # proves prompt_token_ids are what vLLM feeds for the rendered string, BOS included
++    # Sanity check the explicit token inputs, including intentional historical BOS
++    # choices. Re-tokenizing prompt_text here would override an explicit policy.
+     first = {}
+     for r in recs:
+-        first.setdefault(r["prompt_text"], r)
+-    outs = llm.generate(list(first), make_params(n=1, temperature=0.0, max_tokens=1, seed=0))
+-    for (text, r), o in zip(first.items(), outs):
++        first.setdefault(tuple(r["prompt_token_ids"]), r)
++    outs = llm.generate([{"prompt_token_ids": list(ids)} for ids in first],
++                        make_params(n=1, temperature=0.0, max_tokens=1, seed=0))
++    if len(outs) != len(first):
++        raise StaleCache("vLLM prompt check returned an incomplete result")
++    for r, o in zip(first.values(), outs):
+         got = list(o.prompt_token_ids)
+         if got != r["prompt_token_ids"]:
+             raise StaleCache(
+-                f"{r['prefix_id']}: vLLM tokenizes prompt_text to {got[:4]}... "
++                f"{r['prefix_id']}: vLLM reports prompt IDs {got[:4]}... "
+                 f"but the prefix file has {r['prompt_token_ids'][:4]}...; rebuild prefixes")
+-    print(f"prompt check: {len(first)} prompts match vLLM's own tokenization", flush=True)
++    print(f"prompt check: {len(first)} explicit prompts match vLLM inputs; historical generation remains separately audited", flush=True)
+ 
+ 
+ class Budget:
+@@ -239,6 +355,7 @@
+     # work: [(record, n)]. returns (stop reason or None, measured gen tok/s or None).
+     # live_seqs counts unfinished samples, so the engine is refilled as soon as any sample
+     # ends, not when a prefix's slowest one does
++    validate_prefixes([r for r, _ in work])
+     engine, tokenizer = llm.llm_engine, llm.get_tokenizer()
+     units = units_of(work)
+     live, pending = {}, []  # live: request id -> Live
+@@ -323,6 +440,12 @@
+                     "seed": p.seed,
+                     "max_tokens": p.max_tokens,
+                     "prefix_sha": prefix_sha(rec),
++                    "prefix_definition_sha": prefix_definition_sha(rec),
++                    "gold_answer": rec["gold_answer"],
++                    "prompt_token_ids": rec["prompt_token_ids"],
++                    "prefix_gen_token_ids": rec["prefix_gen_token_ids"],
++                    "input_capture": "recorded_at_rollout_submission",
++                    "source_token_provenance": rec.get("token_input_provenance", "legacy_unverified"),
+                     "config_hash": cfg_hash,
+                     "source": rec["source"],
+                     "tier": rec.get("tier"),
+@@ -399,6 +522,7 @@
+             setattr(args, k, v)
+         args.out = args.out or f"{OUT_DIR}/smoke.jsonl"
+     args.out = args.out or f"{OUT_DIR}/rollouts.jsonl"
++    check_paths(args.prefix_file, args.out)
+     if args.rate_usd_hr is None:
+         args.rate_usd_hr = RATES[args.gpu]
+     if not args.max_num_seqs:
+@@ -409,9 +533,10 @@
+         raise SystemExit("a top-up needs --round >= 1 so it draws a fresh seed stream")
+ 
+     if args.status:
+-        prefixes = read_jsonl(args.prefix_file)
++        prefixes = read_prefixes(args.prefix_file)
+         done = done_rows(args.out, prefixes)
+         print(f"{len(done)}/{len(prefixes)} prefixes done in {args.out}")
++        print("Status only: legacy rows can be counted without certifying their budget/gold-answer binding.")
+         print(progress(prefixes, done, args.round, args.n, None, args.rate_usd_hr))
+         ledger = f"{args.out}.ledger.json"
+         for key, runs in (json.load(open(ledger)).items() if os.path.exists(ledger) else []):
+@@ -433,7 +558,7 @@
+         sp.output_kind = RequestOutputKind.DELTA
+         return sp
+ 
+-    prefixes = read_jsonl(args.prefix_file)
++    prefixes = read_prefixes(args.prefix_file)
+     overrides = None
+     if args.n_override_file:
+         overrides = {r["prefix_id"]: int(r["n"]) for r in read_jsonl(args.n_override_file)}
+@@ -444,7 +569,7 @@
+     torn = repair_tail(args.out)
+     if torn:
+         print(f"cut a torn {torn}-byte last line from {args.out}", flush=True)
+-    done = done_rows(args.out, prefixes)
++    done = done_rows(args.out, prefixes, cfg_hash, args.seed, args.max_tokens_cap)
+     work = todo(prefixes, done, args.round, args.n, overrides, args.limit, args.tiers)
+     budget = Budget(args, f"{args.out}.ledger.json")
+     print(f"config {short(cfg_hash)}: temp {args.temp}, top_p {args.top_p}, n {args.n}, round "
+@@ -468,7 +593,7 @@
+     stop, tok_s = run(llm, make_params, work, args, args.out, cfg_hash, budget)
+     budget.save()
+ 
+-    done = done_rows(args.out, prefixes)
++    done = done_rows(args.out, prefixes, cfg_hash, args.seed, args.max_tokens_cap)
+     print(f"\n{'stopped: ' + stop if stop else 'all requested prefixes done'}")
+     print(f"measured {tok_s or float('nan'):,.0f} gen tok/s; ${budget.spent():.2f} spent "
+           f"this run (incl. ~{STARTUP_S // 60} min startup)")
+--- /dev/null
++++ b/tests/test_alignment_guards.py
+@@ -0,0 +1,213 @@
++"""CPU-only regression checks for token provenance, BOS policy and rollout resume."""
++import copy
++import json
++import os
++import sys
++import tempfile
++import types
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path[:0] = [str(ROOT / "src" / "recovery"), str(ROOT / "src")]
++for name, attrs in {
++    "torch": {}, "datasets": {"load_dataset": lambda *a, **k: {}},
++    "transformers": {"AutoTokenizer": object, "AutoModelForCausalLM": object},
++    "math_verify": {"parse": lambda x: x, "verify": lambda a, b: a == b},
++}.items():
++    module = types.ModuleType(name)
++    module.__dict__.update(attrs)
++    sys.modules[name] = module
++
++import common
++import build_prefixes as bp
++import run_rollouts as rr
++from cache import StaleCache, sha_file
++from generate import attach_token_inputs
++
++
++class Tokenizer:
++    bos_token_id, eos_token_id = 1, 2
++    name_or_path, chat_template, special_tokens_map = "test", "template", {}
++
++    def get_vocab(self):
++        return {"a": 10, "b": 11}
++
++    def apply_chat_template(self, *args, **kwargs):
++        return "<think>"
++
++    def __call__(self, text, **kwargs):
++        if text == "ab":
++            return {"input_ids": [10, 11], "offset_mapping": [(0, 1), (1, 2)]}
++        return {"input_ids": [1, 3]}
++
++    def decode(self, ids, **kwargs):
++        return "".join({10: "a", 11: "b"}.get(i, "") for i in ids)
++
++
++def trace(tid="1_0"):
++    return {"trace_id": tid, "problem_id": 1, "problem": "question", "text": "ab"}
++
++
++def prefix():
++    return {"prefix_id": "ceil/1_0/p2", "problem_id": 1, "trace_id": "1_0",
++            "checkpoint": "p2", "cut_token_idx": 2, "prompt_token_ids": [1, 3],
++            "prefix_gen_token_ids": [10, 11], "max_tokens": 10, "gold_answer": "7"}
++
++
++def completed(rec):
++    return {**{k: rec[k] for k in ("prefix_id", "problem_id", "trace_id", "checkpoint", "cut_token_idx")},
++            "round": 0, "n": 2, "prefix_sha": rr.prefix_sha(rec), "config_hash": "cfg",
++            "prefix_definition_sha": rr.prefix_definition_sha(rec),
++            "gold_answer": rec["gold_answer"], "max_tokens": rec["max_tokens"],
++            "seed": common.prefix_seed(0, rec["prefix_id"], 0),
++            "samples": [{"sample_idx": i, "correct": bool(i), "truncated": False} for i in range(2)]}
++
++
++class AlignmentGuards(unittest.TestCase):
++    def test_explicit_bos_and_legacy_label(self):
++        tok = Tokenizer()
++        self.assertEqual(common.prompt_ids(tok, "q", 1), [1, 3])
++        self.assertEqual(common.prompt_ids(tok, "q", 2), [1, 1, 3])
++        self.assertEqual(common.trace_inputs(tok, trace())[3], "reconstructed_legacy_unverified")
++
++    def test_policy_is_bound_to_source(self):
++        with tempfile.TemporaryDirectory() as d:
++            source, policy = Path(d) / "source.jsonl", Path(d) / "bos.json"
++            source.write_text(json.dumps(trace()) + "\n")
++            value = {"traces_sha256": sha_file(source), "basis": "likelihood inference", "traces": {"1_0": 1}}
++            policy.write_text(json.dumps(value))
++            self.assertEqual(common.load_bos_policy(policy, [trace()], source), value)
++            source.write_text(json.dumps(trace()) + "\n\n")
++            with self.assertRaises(ValueError):
++                common.load_bos_policy(policy, [trace()], source)
++
++    def test_saved_generation_ids_preferred_and_policy_conflict_rejected(self):
++        tok = Tokenizer()
++        saved = attach_token_inputs(trace(), tok, [1, 1, 3], [10, 11, 2])
++        prompt, ids, offsets, provenance = common.trace_inputs(tok, saved, need_offsets=True)
++        self.assertEqual((prompt, ids, provenance), ([1, 1, 3], [10, 11], "recorded_at_generation"))
++        self.assertEqual(offsets, [(0, 1), (1, 2)])
++        with self.assertRaises(ValueError):
++            common.trace_inputs(tok, saved, {"traces": {"1_0": 1}})
++        changed = copy.deepcopy(saved)
++        changed["text"] = "changed"
++        with self.assertRaises(ValueError):
++            common.trace_inputs(tok, changed)
++
++    def test_shared_t0_requires_same_prompt(self):
++        traces = [trace("1_0"), trace("1_1")]
++        with self.assertRaises(ValueError):
++            bp.problem_prompt(Tokenizer(), traces, {"traces": {"1_0": 1, "1_1": 2}})
++
++    def test_recorded_count_accepts_hf_and_vllm_eos_conventions(self):
++        saved = attach_token_inputs(trace(), Tokenizer(), [1, 3], [10, 11, 2])
++        for count in (2, 3):
++            saved["n_gen"] = count
++            self.assertTrue(common.canonical(saved, [10, 11]))
++            self.assertFalse(common.canonical(saved, [10, 12]))
++        saved["n_gen"] = 99
++        self.assertFalse(common.canonical(saved, [10, 11]))
++
++    def test_structured_legacy_prompt_is_forwarded(self):
++        class StructuredTokenizer(Tokenizer):
++            def apply_chat_template(self, messages, **kwargs):
++                self.message = messages[0]["content"]
++                return "<think>"
++        tok = StructuredTokenizer()
++        common.trace_inputs(tok, {**trace(), "structured": True})
++        self.assertIn("Number each step", tok.message)
++
++    def test_cut_checkpoint_and_duplicate_prefix_guards(self):
++        p = prefix()
++        rr.validate_prefixes([p])
++        for changed in ({**p, "cut_token_idx": 1}, {**p, "checkpoint": "p3"},
++                        {**p, "prefix_gen_token_ids": [True, 11]}, {**p, "gold_answer": None},
++                        {**p, "gold_answer": " "}):
++            with self.assertRaises(StaleCache):
++                rr.validate_prefixes([changed])
++        with self.assertRaises(StaleCache):
++            rr.validate_prefixes([p, p])
++
++    def test_resume_rejects_bad_metadata_samples_and_conflicts(self):
++        p, row = prefix(), completed(prefix())
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d) / "rollouts"
++            path.write_text(json.dumps(row) + "\n")
++            self.assertEqual(rr.done_rows(path, [p], "cfg", 0), {(p["prefix_id"], 0)})
++            bad = [dict(row, problem_id=99), dict(row, n=3), dict(row, seed=1)]
++            duplicate = copy.deepcopy(row)
++            duplicate["samples"][1]["sample_idx"] = 0
++            bad.append(duplicate)
++            for item in bad:
++                path.write_text(json.dumps(item) + "\n")
++                with self.assertRaises(StaleCache):
++                    rr.done_rows(path, [p], "cfg", 0)
++            conflict = copy.deepcopy(row)
++            conflict["samples"][0]["correct"] = True
++            path.write_text(json.dumps(row) + "\n" + json.dumps(conflict) + "\n")
++            with self.assertRaises(StaleCache):
++                rr.done_rows(path, [p])
++
++    def test_valid_last_record_is_not_deleted(self):
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d) / "rollouts"
++            payload = json.dumps(completed(prefix()))
++            path.write_text(payload)
++            self.assertEqual(rr.repair_tail(path), 0)
++            self.assertEqual(path.read_text(), payload + "\n")
++            with path.open("a") as f:
++                f.write('{"torn":')
++            self.assertGreater(rr.repair_tail(path), 0)
++            self.assertEqual(path.read_text(), payload + "\n")
++            self.assertEqual(len(list(Path(d).glob("*.torn_tail.*.bin"))), 1)
++
++    def test_resume_binds_continuation_budget_and_gold_answer(self):
++        p, row = prefix(), completed(prefix())
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d) / "rollouts"
++            path.write_text(json.dumps(row) + "\n")
++            for changed in ({**p, "max_tokens": 100}, {**p, "gold_answer": "8"}):
++                with self.assertRaisesRegex(StaleCache, "budget or gold answer changed"):
++                    rr.done_rows(path, [changed], "cfg", 0, 0)
++            with self.assertRaisesRegex(StaleCache, "effective continuation budget"):
++                rr.done_rows(path, [p], "cfg", 0, 5)
++            row["max_tokens"] = 5
++            path.write_text(json.dumps(row) + "\n")
++            self.assertEqual(rr.done_rows(path, [p], "cfg", 0, 5), {(p["prefix_id"], 0)})
++
++    def test_legacy_rows_are_readable_for_status_but_not_certified_for_resume(self):
++        p, row = prefix(), completed(prefix())
++        row.pop("prefix_definition_sha")
++        row.pop("gold_answer")
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d) / "rollouts"
++            path.write_text(json.dumps(row) + "\n")
++            self.assertEqual(rr.done_rows(path, [p]), {(p["prefix_id"], 0)})
++            with self.assertRaisesRegex(StaleCache, "legacy row lacks"):
++                rr.done_rows(path, [p], "cfg", 0, 0)
++
++    def test_prefix_definition_cannot_skip_torn_record(self):
++        with tempfile.TemporaryDirectory() as d:
++            path = Path(d) / "prefixes"
++            path.write_text(json.dumps(prefix()) + '\n{"prefix_id":')
++            with self.assertRaises(json.JSONDecodeError):
++                rr.read_prefixes(path)
++
++    def test_sidecar_cannot_replace_prefix_file(self):
++        with self.assertRaises(StaleCache):
++            rr.check_paths("/tmp/rollouts.config.json", "/tmp/rollouts")
++
++    def test_prompt_check_uses_explicit_ids(self):
++        class FakeLLM:
++            def generate(self, requests, params):
++                self.requests = requests
++                return [types.SimpleNamespace(prompt_token_ids=r["prompt_token_ids"]) for r in requests]
++        llm = FakeLLM()
++        recs = [prefix(), {**prefix(), "prompt_token_ids": [1, 1, 3]}]
++        rr.check_prompts(llm, lambda **kw: kw, recs)
++        self.assertEqual([r["prompt_token_ids"] for r in llm.requests], [[1, 3], [1, 1, 3]])
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_audit_alignment.py
+@@ -0,0 +1,64 @@
++import json
++from pathlib import Path
++import sys
++import tempfile
++import unittest
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
++from audit_alignment import bos_candidates, check_rollout_manifest, checkpoint_cut, input_hash, load_build_prompt, matching_bos, register_key, strict_loads
++from cache import sha_obj
++
++
++class AlignmentAuditTests(unittest.TestCase):
++    def test_duplicate_prefix_round_rejected(self):
++        seen = set()
++        register_key(seen, ("p", 0))
++        register_key(seen, ("p", 1))
++        with self.assertRaises(ValueError):
++            register_key(seen, ("p", 0))
++
++    def test_changed_cleaned_file_rejected_by_manifest(self):
++        with tempfile.TemporaryDirectory() as directory:
++            rollouts = Path(directory) / "clean.jsonl"
++            manifest = Path(directory) / "manifest.json"
++            rollouts.write_text('{}\n')
++            manifest.write_text(json.dumps({"cleaned_rollouts_sha256": "incorrect"}))
++            with self.assertRaises(ValueError):
++                check_rollout_manifest(rollouts, manifest)
++
++    def test_hash_matches_repository_format(self):
++        self.assertEqual(input_hash([1, 2], [3, 4]), sha_obj([[1, 2], [3, 4]]))
++
++    def test_one_vs_two_bos_and_changed_prefix(self):
++        stored = input_hash([1, 1, 2], [3, 4])
++        self.assertEqual(matching_bos([1, 2], [3, 4], 1, stored), 2)
++        self.assertIsNone(matching_bos([1, 2], [3, 5], 1, stored))
++        self.assertEqual(matching_bos([1, 2], [3, 4], 1, input_hash([1, 2], [3, 4])), 1)
++
++    def test_reject_template_without_exact_one_bos(self):
++        for ids in ([2, 3], [1, 1, 2], []):
++            with self.assertRaises(ValueError):
++                bos_candidates(ids, 1)
++
++    def test_checkpoint_mismatch_and_t0(self):
++        with self.assertRaises(ValueError):
++            checkpoint_cut(dict(checkpoint="p512", cut_token_idx=511, trace_id="1_0"))
++        with self.assertRaises(ValueError):
++            checkpoint_cut(dict(checkpoint="t0", cut_token_idx=0, trace_id="1_0"))
++        self.assertEqual(checkpoint_cut(dict(checkpoint="t0", cut_token_idx=0, trace_id=None)), 0)
++
++    def test_strict_json(self):
++        for raw in ['{"x":1,"x":2}', '{"x":NaN}', 'broken']:
++            with self.assertRaises(ValueError):
++                strict_loads(raw)
++
++    def test_loads_prompt_without_model_imports(self):
++        with tempfile.TemporaryDirectory() as directory:
++            source = Path(directory) / "generate.py"
++            source.write_text('import package_that_does_not_exist\nINSTRUCTION="i"\nSTRUCTURED="s"\ndef build_prompt(tokenizer, question, structured=False):\n    return question + (STRUCTURED if structured else INSTRUCTION)\n')
++            build = load_build_prompt(source)
++            self.assertEqual(build(None, "q", True), "qs")
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_audit_full_cache.py
+@@ -0,0 +1,86 @@
++"""Tiny CPU fixtures for the read-only full-cache auditor."""
++import contextlib
++import io
++import json
++from pathlib import Path
++import sys
++import tempfile
++import unittest
++
++sys.dont_write_bytecode = True
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
++import numpy as np
++import pandas as pd
++from audit_full_cache import audit_cache, sha256
++
++
++class FullCacheAudit(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.root = Path(self.temp.name)
++        self.cfg = {"layers": list(range(-1, 28)), "layer_convention": "hidden_states[l+1]",
++                    "positions": [128], "rows": 4, "traces": 2}
++        (self.root / "full_config.json").write_text(json.dumps(self.cfg))
++        self.meta = pd.DataFrame({"trace_id": ["1_0", "1_0", "1_1", "1_1"],
++                                  "ckpt": ["128", "end", "128", "end"],
++                                  "pos": [128, 200, 128, 210], "row": [0, 1, 2, 3]})
++        self.meta.to_parquet(self.root / "meta_full.parquet")
++        np.save(self.root / "acts_full.npy", np.zeros((4, 29, 1536), dtype=np.float16))
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def test_good_fixture_is_read_only_and_never_claims_historical_provenance(self):
++        before = {p.name: (sha256(p), p.stat().st_mtime_ns) for p in self.root.iterdir()}
++        capture = io.StringIO()
++        with contextlib.redirect_stdout(capture):
++            result = audit_cache(self.root, (self.root / "acts_full.npy").stat().st_size, chunk_rows=2)
++        after = {p.name: (sha256(p), p.stat().st_mtime_ns) for p in self.root.iterdir()}
++        self.assertEqual(before, after)
++        self.assertEqual(capture.getvalue(), "")
++        self.assertTrue(result["structural_checks_passed"])
++        self.assertEqual(result["scope"], "structural_only")
++        self.assertEqual(result["historical_input_provenance"], "unverified")
++        self.assertIn("sha256_observed_now", result["files"]["acts_full.npy"])
++
++    def test_appended_bytes_and_wrong_reported_size_fail(self):
++        with (self.root / "acts_full.npy").open("ab") as handle:
++            handle.write(b"unexpected trailing bytes")
++        result = audit_cache(self.root, expected_acts_bytes=1)
++        self.assertFalse(result["checks"]["activations.exact_header_plus_payload_size"]["passed"])
++        self.assertFalse(result["checks"]["activations.matches_reported_drive_size"]["passed"])
++
++    def test_shape_dtype_and_nonfinite_values_fail(self):
++        array = np.zeros((4, 28, 1536), dtype=np.float32)
++        array[3, 1, 0] = np.nan
++        np.save(self.root / "acts_full.npy", array)
++        result = audit_cache(self.root, chunk_rows=2)
++        for name in ("activations.fp16", "activations.expected_shape", "activations.all_finite"):
++            self.assertFalse(result["checks"][name]["passed"])
++        self.assertEqual(result["checks"]["activations.all_finite"]["detail"]["first_bad_rows"], [3])
++
++    def test_metadata_duplicate_order_position_and_config_counts_fail(self):
++        self.meta.loc[1, ["row", "ckpt", "pos"]] = [3, "128", 127]
++        self.meta.to_parquet(self.root / "meta_full.parquet")
++        self.cfg.update(rows=9, traces=7, layers=list(range(28, -1, -1)))
++        (self.root / "full_config.json").write_text(json.dumps(self.cfg))
++        result = audit_cache(self.root)
++        for name in ("metadata.sequential_rows", "metadata.unique_trace_checkpoint",
++                     "metadata.fixed_checkpoint_matches_position", "config.rows_match_metadata",
++                     "config.traces_match_metadata", "config.layer_order"):
++            self.assertFalse(result["checks"][name]["passed"])
++
++    def test_missing_and_truncated_arrays_are_reported_without_fabrication(self):
++        path = self.root / "acts_full.npy"
++        path.unlink()
++        result = audit_cache(self.root)
++        self.assertFalse(result["structural_checks_passed"])
++        self.assertFalse(result["checks"]["acts_full.npy.exists"]["passed"])
++        self.assertNotIn("acts_full.npy", result["files"])
++        path.write_bytes(b"broken NPY")
++        result = audit_cache(self.root)
++        self.assertFalse(result["checks"]["activations.readable"]["passed"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_ceiling_integrity.py
+@@ -0,0 +1,116 @@
++"""CPU-only regression tests for rollout integrity and input alignment gates."""
++import copy
++import json
++from pathlib import Path
++import sys
++import tempfile
++import unittest
++
++import pandas as pd
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "probe_cmp"))
++import ceiling as C
++
++
++class RolloutIntegrityTests(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.directory = Path(self.temp.name)
++        self.row = dict(prefix_id="ceil/1_0/p512", round=0, problem_id=1,
++                        trace_id="1_0", checkpoint="p512", cut_token_idx=512,
++                        n=1, prefix_sha="input-A", config_hash="config-A",
++                        samples=[dict(sample_idx=0, correct=True, truncated=False, answer="7")])
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def load(self, rows):
++        path = self.directory / "rollouts.jsonl"
++        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
++        return C.load_rollouts(path)[0]
++
++    def test_identical_resume_sample_counted_once(self):
++        frame = self.load([self.row, self.row])
++        self.assertEqual(frame.iloc[0]["n"], 1)
++
++    def test_conflicting_resume_sample_rejected(self):
++        changed = copy.deepcopy(self.row)
++        changed["samples"][0]["correct"] = False
++        with self.assertRaisesRegex(ValueError, "conflicting repeated"):
++            self.load([self.row, changed])
++
++    def test_changed_input_hash_rejected(self):
++        changed = copy.deepcopy(self.row)
++        changed["prefix_sha"] = "input-B"
++        with self.assertRaisesRegex(ValueError, "conflicting metadata/input"):
++            self.load([self.row, changed])
++
++    def test_changed_budget_or_gold_across_rounds_rejected(self):
++        original = {**self.row, "max_tokens": 100, "gold_answer": "7"}
++        for change in ({"max_tokens": 50}, {"gold_answer": "8"}):
++            changed = {**copy.deepcopy(original), "round": 1, **change}
++            with self.assertRaisesRegex(ValueError, "conflicting metadata/input"):
++                self.load([original, changed])
++
++    def test_malformed_interior_record_rejected(self):
++        path = self.directory / "rollouts.jsonl"
++        path.write_text('{"broken":\n' + json.dumps(self.row) + "\n")
++        with self.assertRaisesRegex(ValueError, "quarantine explicitly"):
++            C.load_rollouts(path)
++
++    def test_wrong_cut_rejected(self):
++        self.row["cut_token_idx"] = 511
++        with self.assertRaisesRegex(ValueError, "token cut disagree"):
++            self.load([self.row])
++
++    def test_conflicting_sample_count_rejected(self):
++        self.row["n"] = 8
++        with self.assertRaisesRegex(ValueError, "sample count"):
++            self.load([self.row])
++
++    def test_empty_file_rejected(self):
++        with self.assertRaisesRegex(ValueError, "No complete"):
++            self.load([])
++
++    def test_duplicate_cut_under_different_prefix_id_rejected(self):
++        duplicate = copy.deepcopy(self.row)
++        duplicate["prefix_id"] += "/alias"
++        with self.assertRaisesRegex(ValueError, "same source trace/checkpoint"):
++            self.load([self.row, duplicate])
++
++    def test_out_of_range_sample_index_rejected(self):
++        self.row["samples"][0]["sample_idx"] = 8
++        with self.assertRaisesRegex(ValueError, "0 through n-1"):
++            self.load([self.row])
++
++    def test_duplicate_json_keys_and_nonfinite_values_rejected(self):
++        for raw in ('{"x":1,"x":2}', '{"x":NaN}'):
++            with self.assertRaises(ValueError):
++                C.strict_json(raw)
++
++    def source(self):
++        return pd.DataFrame([dict(trace_id="1_0", problem_id=1, y=0,
++                                  is_correct=True, answer="7")]).set_index("trace_id", drop=False)
++
++    def test_known_extraction_rollout_hash_mismatch_rejected(self):
++        frame = self.load([self.row])
++        meta = pd.DataFrame([dict(trace_id="1_0", pos=512, prefix_sha="input-B",
++                                  prefix="thinking", restarts=0)]).set_index(["trace_id", "pos"])
++        with self.assertRaisesRegex(ValueError, "input hashes disagree"):
++            C.run(frame, self.source(), "unused", str(self.directory / "out"), meta=meta)
++
++    def test_unknown_source_rejected_before_predictions(self):
++        frame = self.load([self.row])
++        frame["trace_id"] = "missing"
++        with self.assertRaisesRegex(ValueError, "unknown source"):
++            C.run(frame, self.source(), "unused", str(self.directory / "out"))
++
++    def test_wrong_problem_rejected_before_predictions(self):
++        frame = self.load([self.row])
++        frame["problem_id"] = 2
++        with self.assertRaisesRegex(ValueError, "problem IDs disagree"):
++            C.run(frame, self.source(), "unused", str(self.directory / "out"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/tests/test_trace_inputs.py
+@@ -0,0 +1,189 @@
++"""CPU-only tests of exact-token provenance/BOS/cache guards; no model downloads."""
++import copy
++import json
++import os
++from pathlib import Path
++import sys
++import tempfile
++import types
++import unittest
++from unittest.mock import patch
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
++
++
++def stub(name, **attrs):
++    module = types.ModuleType(name)
++    vars(module).update(attrs)
++    sys.modules[name] = module
++
++
++stub("torch", Tensor=type("Tensor", (), {}), __version__="0.0.0")
++stub("datasets", load_dataset=lambda *a, **k: None)
++stub("math_verify", parse=lambda x: x, verify=lambda a, b: a == b)
++stub("transformers", AutoTokenizer=object, AutoModelForCausalLM=object)
++
++import numpy as np
++import pandas as pd
++import cache
++import extract
++import generate
++
++
++class Tokenizer:
++    bos_token_id, eos_token_id = 1, 2
++    name_or_path, chat_template = "mock", "mock template"
++    special_tokens_map = {"bos_token": "<BOS>", "eos_token": "<EOS>"}
++
++    def get_vocab(self):
++        return {"<BOS>": 1, "<EOS>": 2, "a": 10, "b": 11, "ab": 12, "prompt": 20}
++
++    def __len__(self):
++        return len(self.get_vocab())
++
++    def apply_chat_template(self, *args, **kwargs):
++        return "prompt<think>"
++
++    def __call__(self, text, add_special_tokens=True, return_offsets_mapping=False):
++        if text.startswith("prompt"):
++            return {"input_ids": [1, 1, 20] if add_special_tokens else [1, 20]}
++        out = {"input_ids": [10, 11]}
++        if return_offsets_mapping:
++            out["offset_mapping"] = [(0, 1), (1, 2)]
++        return out
++
++    def decode(self, ids, skip_special_tokens=False):
++        pieces = {1: "<BOS>", 2: "<EOS>", 10: "a", 11: "b", 12: "ab", 20: "prompt"}
++        return "".join(pieces[x] for x in ids if not skip_special_tokens or x not in (1, 2))
++
++
++class TraceInputs(unittest.TestCase):
++    def setUp(self):
++        self.tok = Tokenizer()
++        self.trace = {"trace_id": "7_0", "problem_id": 7, "problem": "question", "text": "ab",
++                      "n_gen": 3, "trunc": False, "is_correct": True, "level": 3, "structured": False}
++
++    def recorded(self, prompt=None, generated=None):
++        return generate.attach_token_inputs(copy.deepcopy(self.trace), self.tok,
++                                            [1, 1, 20] if prompt is None else prompt,
++                                            [10, 11, 2] if generated is None else generated)
++
++    def test_exact_generation_ids_and_terminal_eos(self):
++        trace = self.recorded()
++        self.assertEqual(trace["completion_token_ids"], [10, 11, 2])
++        self.assertEqual(trace["generated_token_ids"], [10, 11])
++        self.assertEqual(generate.recorded_token_inputs(self.tok, trace), ([1, 1, 20], [10, 11]))
++        prompt, ids, offsets = extract.encode(self.tok, trace)
++        self.assertEqual(prompt, [1, 1, 20])  # no extra BOS added
++        self.assertEqual(offsets, [(0, 1), (1, 2)])
++
++    def test_source_and_recorded_ids_are_bound(self):
++        for field, value in (("text", "changed"), ("problem", "another question"), ("structured", True)):
++            trace = self.recorded()
++            trace[field] = value
++            with self.assertRaisesRegex(ValueError, "different problem"):
++                generate.recorded_token_inputs(self.tok, trace)
++        trace = self.recorded()
++        trace["prompt_token_ids"] = [1, 20]
++        with self.assertRaisesRegex(ValueError, "ordered token IDs changed"):
++            generate.recorded_token_inputs(self.tok, trace)
++
++    def test_partial_recording_and_wrong_tokenizer_fail(self):
++        trace = dict(self.trace, prompt_token_ids=[1, 20])
++        with self.assertRaisesRegex(ValueError, "incomplete"):
++            extract.encode(self.tok, trace)
++        trace = self.recorded()
++        self.tok.name_or_path = "another-tokenizer"
++        with self.assertRaisesRegex(ValueError, "different tokenizer"):
++            extract.encode(self.tok, trace)
++
++    def test_tokenizer_identity_ignores_only_runtime_padding_and_truncation(self):
++        config = {"model": {"type": "BPE", "vocab": {"a": 10, "b": 11}},
++                  "added_tokens": [{"id": 1, "content": "<BOS>", "special": True}],
++                  "padding": None, "truncation": None}
++        self.tok.backend_tokenizer = types.SimpleNamespace(to_str=lambda: json.dumps(config))
++        before = generate.tokenizer_identity(self.tok)
++        trace = self.recorded()
++        config["padding"] = {"strategy": "BatchLongest", "pad_id": 2, "pad_token": "<EOS>"}
++        config["truncation"] = {"max_length": 999, "strategy": "LongestFirst"}
++        self.tok.special_tokens_map = dict(self.tok.special_tokens_map, pad_token="<EOS>")
++        self.assertEqual(before, generate.tokenizer_identity(self.tok))
++        self.assertEqual(generate.recorded_token_inputs(self.tok, trace), ([1, 1, 20], [10, 11]))
++        config["model"]["vocab"]["new"] = 42
++        self.assertNotEqual(before, generate.tokenizer_identity(self.tok))
++        del config["model"]["vocab"]["new"]
++        config["added_tokens"].append({"id": 43, "content": "<new>", "special": True})
++        self.assertNotEqual(before, generate.tokenizer_identity(self.tok))
++        config["added_tokens"].pop()
++        self.tok.chat_template = "different template"
++        self.assertNotEqual(before, generate.tokenizer_identity(self.tok))
++
++    def test_legacy_default_and_explicit_bos_policy(self):
++        self.assertEqual(extract.encode(self.tok, self.trace)[0], [1, 20])
++        self.assertEqual(extract.encode(self.tok, self.trace, legacy_n_bos=2)[0], [1, 1, 20])
++        self.assertEqual(extract.encode(self.tok, dict(self.trace, n_bos=2))[0], [1, 1, 20])
++        with self.assertRaisesRegex(ValueError, "conflicts"):
++            extract.encode(self.tok, self.recorded(), legacy_n_bos=1)
++        with self.assertRaisesRegex(ValueError, "integer 1 or 2"):
++            extract.encode(self.tok, self.trace, legacy_n_bos=True)
++
++    def test_retokenization_drift_does_not_replace_recorded_tokens(self):
++        # Alternative actual tokenization decodes to the same text.
++        trace = self.recorded(generated=[12, 2])
++        prompt, ids, offsets = extract.encode(self.tok, trace)
++        self.assertEqual(ids, [12])
++        self.assertIsNone(offsets)
++        with self.assertRaisesRegex(ValueError, "offsets are unverified"):
++            extract.segment(trace["text"], offsets)
++
++    def test_part_fingerprint_changes_with_bos_or_same_length_tokens(self):
++        base = extract.expect_part(self.trace, [10, 11], [1], [1, 20])
++        other = extract.expect_part(self.trace, [10, 11], [1], [1, 1, 20])
++        self.assertNotEqual(base["prompt_ids_sha"], other["prompt_ids_sha"])
++        other = extract.expect_part(self.trace, [11, 10], [1], [1, 20])
++        self.assertNotEqual(base["trace_ids_sha"], other["trace_ids_sha"])
++
++    def test_metadata_mutation_is_rejected_even_with_same_trace_order(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            meta, acts = str(Path(tmp) / "meta.parquet"), str(Path(tmp) / "acts.npy")
++            Path(meta).write_bytes(b"original labels")
++            Path(acts).write_bytes(b"activations")
++            cache.write_dataset_manifest(meta, acts, {}, cache.sha_obj({}), ["7_0"], (1, 1, 1))
++            Path(meta).write_bytes(b"different labels")
++            with self.assertRaisesRegex(cache.StaleCache, "metadata contents changed"):
++                cache.check_dataset_manifest(meta, acts, ["7_0"], (1, 1, 1))
++
++    def test_fixed_extraction_reuses_only_matching_inputs_and_records_prefix_hash(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            traces = [dict(self.trace, n_gen=2, n_bos=1), dict(self.trace, trace_id="7_1", n_gen=2, n_bos=1)]
++            paths = [str(root / n) for n in ("acts.npy", "meta.parquet", "parts")]
++            calls = []
++            def fake_activations(model, device, prompt, ids, indices):
++                calls.append((prompt[:], ids[:]))
++                return np.zeros((len(indices), len(extract.LAYERS), 3), dtype=np.float16)
++            with patch.object(extract, "POSITIONS", [1, 2]), patch.object(extract, "activations", fake_activations):
++                extract.fixed(self.tok, None, "cpu", traces, *paths)
++                self.assertEqual(len(calls), 2)
++                extract.fixed(self.tok, None, "cpu", traces, *paths)
++                self.assertEqual(len(calls), 2)
++                traces[0]["n_bos"] = 2
++                extract.fixed(self.tok, None, "cpu", traces, *paths)
++                self.assertEqual(len(calls), 3)
++            meta = pd.read_parquet(paths[1])
++            self.assertEqual(meta.iloc[0].prefix_sha, cache.sha_obj([[1, 1, 20], [10]]))
++            self.assertEqual(meta.iloc[0].token_input_source, "reconstructed_explicit_bos_policy")
++
++    def test_legacy_adoption_cannot_certify_historical_token_inputs(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            traces = [self.trace, dict(self.trace, trace_id="7_1")]
++            for n in range(2):
++                np.save(Path(tmp) / f"{n}.npy", np.zeros((1, len(extract.LAYERS), 3)))
++            with patch.object(extract, "POSITIONS", [1]):
++                for sample_size in (1, 2):
++                    with self.assertRaisesRegex(cache.StaleCache, "--adopt is disabled"):
++                        extract.verify(self.tok, None, "cpu", traces, tmp, "fixed", sample_size, True)
++
++
++if __name__ == "__main__":
++    unittest.main()

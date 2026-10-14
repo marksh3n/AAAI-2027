@@ -1,0 +1,42 @@
+{
+  "folder_url": "https://drive.google.com/drive/folders/1GgqDKOUxHDvuj9YH3Ln1TEV-1hicCli7",
+  "read_only": true,
+  "downloaded": [
+    {
+      "name": "meta_full.parquet",
+      "id": "12ojMl0WfFNC3-5DiOqzvdGMeGducvwwf"
+    },
+    {
+      "name": "full_config.json",
+      "id": "1k85TPWOXGeZk4rEUhykAJCqbzlmeE7hK"
+    },
+    {
+      "name": "e0_full_table.csv",
+      "id": "1r2AuWq-3vNIXisR2Ar5WEmrKXzBT1MvB"
+    },
+    {
+      "name": "e0_full_table_counts.csv",
+      "id": "1F3ImGNTop7ygdUEmYHg5V0huhhJAdFO5"
+    },
+    {
+      "name": "e0_full_table_ceiling.csv",
+      "id": "123Q3AF-c4GMQNrAeEyx-OaOgB_c5x8wj"
+    },
+    {
+      "name": "run.log",
+      "id": "1jmP-Sc74YUIknzn6iRcBUxX3Smg4PgnY"
+    },
+    {
+      "name": "run_table.log",
+      "id": "1oX3RQf9VqM7empgJWM3uLAIeKRo98EQQ"
+    }
+  ],
+  "activation_file": {
+    "name": "acts_full.npy",
+    "id": "1CAYA1G_qH115Hk3iT_k5b6c03kcuHMjo",
+    "size_bytes": 1370173568,
+    "download_status": "blocked_by_268435456_byte_download_limit",
+    "numerical_integrity": "not_checked"
+  },
+  "historical_provenance": "No recorded activation input hashes in full_config or metadata"
+}

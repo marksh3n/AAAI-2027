@@ -1,0 +1,7 @@
+{
+  "cleaned_records": 1430,
+  "continuations": 11440,
+  "torn_lines": 0,
+  "raw_corruption_rejected": true,
+  "raw_rejection": "/workspace/scratch/4402c8afbe6e/e0-audit/downloaded/recovery_ceiling:1: malformed JSON inside the rollout file; quarantine explicitly before analysis"
+}

@@ -1,0 +1,13 @@
+{
+  "cleaned_prefixes": 1430,
+  "continuations": 11440,
+  "torn_lines": 0,
+  "checkpoints": {
+    "p512": 448,
+    "p2048": 448,
+    "p4096": 447,
+    "t0": 87
+  },
+  "raw_corruption_rejected": true,
+  "raw_rejection": "/workspace/scratch/4402c8afbe6e/e0-audit/downloaded/recovery_ceiling:1: malformed JSON inside the rollout file; quarantine explicitly before analysis"
+}

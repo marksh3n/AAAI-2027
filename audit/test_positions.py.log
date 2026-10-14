@@ -1,0 +1,132 @@
+wrote data/meta_T.manifest.json (config e5ae189b117a)
+
+1. subset of positions
+dataset config e5ae189b117a, extracted 2026-10-13 18:21:46
+19 mixed-outcome problems of 20
+WARNING: under 30 mixed problems, the within-problem test is underpowered
+
+yield by position (later positions are length-selected subsamples)
+ pos  traces  correct  wrong  problems  mixed
+ 128     120       72     48        20     19
+ 256     120       72     48        20     19
+ 512     120       72     48        20     19
+1024      98       58     40        20     18
+2048      67       39     28        19     13
+4096      16       11      5        11      1
+
+ablation: TR (prefix tf-idf + restart density) vs TRH (+ hidden states)
+layer 16, hidden SVD 5, 1 fold seeds, C chosen per arm by 3-fold inner CV.
+n_gen is excluded.
+null delta: 0 reps with activations permuted within problem, i.e. the gap uninformative hidden columns produce on their own. judge delta by z (its distance from that null, in null sd units) rather than by CI.
+
+  pos  pairs probs              TR             TRH           delta      null delta      z                  CI
+  128    146    19   0.486 +-0.000   0.452 +-0.000  -0.034 +-0.000         not run      -    [-0.088, +0.021]
+
+wrote data/ablation_T_L16_svd5_p128.json
+  pass  runs with --positions 128
+  pass  wrote data/ablation_T_L16_svd5_p128.json
+  pass  scored exactly one position
+
+2. two positions
+dataset config e5ae189b117a, extracted 2026-10-13 18:21:46
+19 mixed-outcome problems of 20
+WARNING: under 30 mixed problems, the within-problem test is underpowered
+
+yield by position (later positions are length-selected subsamples)
+ pos  traces  correct  wrong  problems  mixed
+ 128     120       72     48        20     19
+ 256     120       72     48        20     19
+ 512     120       72     48        20     19
+1024      98       58     40        20     18
+2048      67       39     28        19     13
+4096      16       11      5        11      1
+
+ablation: TR (prefix tf-idf + restart density) vs TRH (+ hidden states)
+layer 16, hidden SVD 5, 1 fold seeds, C chosen per arm by 3-fold inner CV.
+n_gen is excluded.
+null delta: 0 reps with activations permuted within problem, i.e. the gap uninformative hidden columns produce on their own. judge delta by z (its distance from that null, in null sd units) rather than by CI.
+
+  pos  pairs probs              TR             TRH           delta      null delta      z                  CI
+  128    146    19   0.486 +-0.000   0.452 +-0.000  -0.034 +-0.000         not run      -    [-0.088, +0.021]
+  512    146    19   0.459 +-0.000   0.363 +-0.000  -0.096 +-0.000         not run      -    [-0.149, -0.043]
+
+wrote data/ablation_T_L16_svd5_p128-512.json
+  pass  runs with --positions 128,512
+  pass  separate file, both positions
+
+3. unextracted position refused
+dataset config e5ae189b117a, extracted 2026-10-13 18:21:46
+19 mixed-outcome problems of 20
+WARNING: under 30 mixed problems, the within-problem test is underpowered
+
+yield by position (later positions are length-selected subsamples)
+ pos  traces  correct  wrong  problems  mixed
+ 128     120       72     48        20     19
+ 256     120       72     48        20     19
+ 512     120       72     48        20     19
+1024      98       58     40        20     18
+2048      67       39     28        19     13
+4096      16       11      5        11      1
+   SystemExit: --positions [999] not extracted; available: [128, 256, 512, 1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768]
+  pass  bad position rejected
+
+4. POSITIONS not mutated
+  pass  module POSITIONS intact
+dataset config e5ae189b117a, extracted 2026-10-13 18:21:46
+19 mixed-outcome problems of 20
+WARNING: under 30 mixed problems, the within-problem test is underpowered
+
+yield by position (later positions are length-selected subsamples)
+ pos  traces  correct  wrong  problems  mixed
+ 128     120       72     48        20     19
+ 256     120       72     48        20     19
+ 512     120       72     48        20     19
+1024      98       58     40        20     18
+2048      67       39     28        19     13
+4096      16       11      5        11      1
+
+ablation: TR (prefix tf-idf + restart density) vs TRH (+ hidden states)
+layer 16, hidden SVD 5, 1 fold seeds, C chosen per arm by 3-fold inner CV.
+n_gen is excluded.
+null delta: 0 reps with activations permuted within problem, i.e. the gap uninformative hidden columns produce on their own. judge delta by z (its distance from that null, in null sd units) rather than by CI.
+
+  pos  pairs probs              TR             TRH           delta      null delta      z                  CI
+  128    146    19   0.486 +-0.000   0.452 +-0.000  -0.034 +-0.000         not run      -    [-0.088, +0.021]
+  256    146    19   0.418 +-0.000   0.479 +-0.000  +0.062 +-0.000         not run      -    [-0.014, +0.143]
+  512    146    19   0.459 +-0.000   0.363 +-0.000  -0.096 +-0.000         not run      -    [-0.149, -0.043]
+ 1024     95    18   0.495 +-0.000   0.474 +-0.000  -0.021 +-0.000         not run      -    [-0.148, +0.108]
+ 2048     48    13   0.542 +-0.000   0.604 +-0.000  +0.062 +-0.000         not run      -    [+0.000, +0.158]
+ 4096  skipped: 0 pairs, too few to read
+
+wrote data/ablation_T_L16_svd5.json
+  pass  full run still works after subset runs
+  pass  full run gets its own file
+
+5. layers do not overwrite each other
+dataset config e5ae189b117a, extracted 2026-10-13 18:21:46
+19 mixed-outcome problems of 20
+WARNING: under 30 mixed problems, the within-problem test is underpowered
+
+yield by position (later positions are length-selected subsamples)
+ pos  traces  correct  wrong  problems  mixed
+ 128     120       72     48        20     19
+ 256     120       72     48        20     19
+ 512     120       72     48        20     19
+1024      98       58     40        20     18
+2048      67       39     28        19     13
+4096      16       11      5        11      1
+
+ablation: TR (prefix tf-idf + restart density) vs TRH (+ hidden states)
+layer 12, hidden SVD 5, 1 fold seeds, C chosen per arm by 3-fold inner CV.
+n_gen is excluded.
+null delta: 0 reps with activations permuted within problem, i.e. the gap uninformative hidden columns produce on their own. judge delta by z (its distance from that null, in null sd units) rather than by CI.
+
+  pos  pairs probs              TR             TRH           delta      null delta      z                  CI
+  128    146    19   0.486 +-0.000   0.418 +-0.000  -0.068 +-0.000         not run      -    [-0.150, -0.006]
+
+wrote data/ablation_T_L12_svd5_p128.json
+  pass  layer 12 runs
+  pass  layer 12 has its own file
+  pass  layer 16 file still there
+
+12 passed, 0 failed

@@ -1,0 +1,30 @@
+1. loading
+ok   torn last line skipped
+ok   one row per prefix: 12 problems x (4 traces x 3 cuts + t0) -- 156
+ok   rounds pooled: 16 samples, 14 correct -- (np.int64(16), np.int64(14))
+ok   r counts truncated as not correct; r_finished drops them -- (np.float64(0.25), np.float64(0.2857142857142857))
+
+2. ceiling vs probes
+ok   ceiling separates every pair -> AUROC 1
+ok   noise probe near chance -- 0.6875
+ok   a probe equal to the labels ties the ceiling
+ok   ceiling - noise probe positive, CI above 0
+ok   identical traces: 48 traces, 12 problems, 48 pairs at every checkpoint -- {(48, 12, 48)}
+ok   drift variant drops the flagged traces; problem 0 loses its correct side and leaves the pairs -- ({46}, {11})
+
+3. agreement, answer-in-prefix, restarts, curves
+ok   answers kept per prefix
+ok   agreement with the source's own answer: 6/8 for right sources, 5/8 for wrong ones -- {('p2048', 'correct'): 0.75, ('p2048', 'wrong'): 0.625, ('p4096', 'correct'): 0.75, ('p4096', 'wrong'): 0.625, ('p512', 'correct'): 0.7552083333333334, ('p512', 'wrong'): 0.625, ('t0', 't0'): nan}
+ok   committed cuts: half the right attempts at 4096, none earlier -- {('p2048', 'correct'): 0.0, ('p2048', 'wrong'): 0.0, ('p4096', 'correct'): 0.5, ('p4096', 'wrong'): 0.0, ('p512', 'correct'): 0.0, ('p512', 'wrong'): 0.0, ('t0', 't0'): nan}
+ok   before-commit variant drops the 12 boxed cuts at 4096 only -- (np.int64(36), np.int64(48))
+ok   value-written variant also drops the 2048 cut that states 7 -- 47
+ok   raw restart count scored on the same pairs
+ok   recovery curves written
+ok   answer flags: boxed and </think> commit; a bare value only counts when it stands alone
+ok   t0 rows described but never scored
+ok   summary and csvs written
+
+4. alignment is enforced
+ok   missing probe prediction for a rollout trace stops the run -- lr/raw L20: 1 rollout traces have no probe prediction (e.g. ['3_1']); the ceiling and the probe must share traces
+
+all passed

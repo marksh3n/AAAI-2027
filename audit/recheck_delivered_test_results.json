@@ -1,0 +1,52 @@
+[
+  {
+    "test": "test_cache.py",
+    "exit_code": 0,
+    "seconds": 0.07
+  },
+  {
+    "test": "test_positions.py",
+    "exit_code": 0,
+    "seconds": 13.26
+  },
+  {
+    "test": "test_recovery.py",
+    "exit_code": 0,
+    "seconds": 0.37
+  },
+  {
+    "test": "test_ceiling.py",
+    "exit_code": 0,
+    "seconds": 1.94
+  },
+  {
+    "test": "test_trace_inputs.py",
+    "exit_code": 0,
+    "seconds": 1.1
+  },
+  {
+    "test": "test_alignment_guards.py",
+    "exit_code": 0,
+    "seconds": 0.13
+  },
+  {
+    "test": "test_audit_alignment.py",
+    "exit_code": 0,
+    "seconds": 0.05
+  },
+  {
+    "test": "test_ceiling_integrity.py",
+    "exit_code": 0,
+    "seconds": 0.91
+  },
+  {
+    "test": "test_audit_full_cache.py",
+    "exit_code": 0,
+    "seconds": 0.41
+  },
+  {
+    "test": "test_probe_cmp.py",
+    "exit_code": 0,
+    "seconds": 26.45
+  }
+]

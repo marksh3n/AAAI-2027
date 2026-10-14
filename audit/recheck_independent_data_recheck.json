@@ -1,0 +1,68 @@
+{
+  "independent_of_previous_audit_helpers": true,
+  "source_rows": 2202,
+  "source_problems": 367,
+  "metadata_rows": 15380,
+  "fixed_prefix_rows_compared": 13219,
+  "end_rows_compared": 2161,
+  "token_count_flag_rule": "n_gen minus retokenized length differs from 1 for completed traces or 0 for truncated traces; heuristic only",
+  "source_trace_residual_count_flags": 38,
+  "rollout_records": 1430,
+  "sample_count_histogram": {
+    "8": 1430
+  },
+  "hash_candidate_counts": {
+    "(2,)": 1430
+  },
+  "overlap_counts": {
+    "('main', 'p4096', True)": 264,
+    "('pilot', 'p4096', False)": 183,
+    "('main', 'p512', True)": 265,
+    "('main', 'p2048', True)": 265,
+    "('pilot', 'p2048', False)": 183,
+    "('pilot', 'p512', False)": 183
+  },
+  "source_rollout_traces": 448,
+  "source_rollout_residual_flags": 16,
+  "full_grid_population_counts_match": true,
+  "main_rollout_population": [
+    {
+      "ckpt": "512",
+      "traces": 265,
+      "problems": 52,
+      "pairs": 268,
+      "auroc": 0.6511194029850746
+    },
+    {
+      "ckpt": "2048",
+      "traces": 265,
+      "problems": 52,
+      "pairs": 268,
+      "auroc": 0.6399253731343284
+    },
+    {
+      "ckpt": "4096",
+      "traces": 264,
+      "problems": 52,
+      "pairs": 267,
+      "auroc": 0.7902621722846442
+    }
+  ],
+  "main_rhat_direct_recomputation": [
+    {
+      "ckpt": "512",
+      "max_error": 0.0
+    },
+    {
+      "ckpt": "2048",
+      "max_error": 0.0
+    },
+    {
+      "ckpt": "4096",
+      "max_error": 0.0
+    }
+  ],
+  "wide_cells_checked": 805,
+  "issues": [],
+  "activation_array_checked": false
+}

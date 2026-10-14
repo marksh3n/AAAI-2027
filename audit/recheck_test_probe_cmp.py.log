@@ -1,0 +1,73 @@
+ok   within AUROC weights problems by pairs -- 0.7
+ok   unweighted mean of per-problem AUROC -- 0.4375
+ok   pair and problem counts
+ok   bootstrap with unit draws returns the point estimate
+ok   a draw taking problem 1 twice scores it alone
+ok   pooled AUROC matches sklearn with ties
+ok   weighted pooled AUROC = AUROC on duplicated rows
+ok   within-problem permutation preserves per-problem label counts
+ok   and actually moves labels
+ok   DeLong AUCs
+ok   DeLong variance 0.125 (hand) -- se 0.3535533905932738
+ok   DeLong z and p -- z 0.7071 p 0.47950
+ok   fast DeLong = naive O(mn) DeLong with ties
+ok   DeLong AUC = sklearn
+ok   checkpoints come from the registered files -- ['8', '16', 'end']
+ok   a new source is one registry entry, no code change -- ['8', '16', '24', 'end']
+ok   fixed population = traces reaching every checkpoint
+ok   truncated trace excluded
+ok   only mixed problems
+ok   clean pair passes
+ok   a flipped label is caught
+ok   a row-count mismatch is caught
+ok   a missing checkpoint row (gap) is caught
+ok   a prefix from another row is caught
+ok   a prefix holding the whole trace (future text) is caught
+ok   fraction-labelled source loads from a registry entry alone -- ['8', '0.5', '16', '0.75', 'end']
+ok   relative checkpoints sit on the token axis -- ['8', '0.5', '16', '0.75', 'end']
+ok   bootstrap p is never 0
+ok   len uses tokens observed, not the final length
+ok   paragraphs are counted on the prefix only
+ok   seed 0: no problem in both train and test; every trace tested once
+ok   seed 1: no problem in both train and test; every trace tested once
+ok   seed 2: no problem in both train and test; every trace tested once
+ok   inner CV is grouped and stays inside the training fold
+ok   every scaler is fitted on the training rows only -- [('scaler', 95), ('scaler', 95), ('scaler', 95), ('scaler', 95), ('scaler', 95)]
+ok   raw: training features unchanged when test rows and labels change
+ok   svd50: training features unchanged when test rows and labels change
+ok   topk50: training features unchanged when test rows and labels change
+ok   svd50+len: training features unchanged when test rows and labels change
+ok   SVD features equal an SVD fitted on the training subset alone
+ok   fold tf-idf == TfidfVectorizer(min_df=2) fitted on training docs
+ok   run.py --quick exits cleanly
+ok   wrote population.json
+ok   wrote results_long.csv
+ok   wrote paired_deltas.csv
+ok   wrote perm_null.csv
+ok   wrote summary.md
+ok   wrote within_auroc_by_checkpoint.png
+ok   folds.json shared at the output root
+ok   planted layer-20 signal recovered (hgb/topk50) -- [0.971, 0.971, 0.99, 0.922]
+ok   lr/raw clearly above chance on it -- [0.892, 0.784, 0.833, 0.696]
+ok   len is near chance on unrelated lengths -- [0.672, 0.603, 0.564, 0.637]
+ok   primary rows are layer-20 lr/raw vs len only
+ok   summary states orientation and layer convention
+ok   a rerun resumes from saved predictions -- , 0.01, 0.1, 1.0, 10.0]
+[8] predictions for this config already saved, skipping
+[16] predictions for this config already saved, skipping
+[24] predictions for this config already saved, skipping
+[end] predictions for this config already saved, skipping
+
+fitting done in 0 s; building report
+total 1 s
+
+ok   default run is not flagged exploratory
+ok   significant negative delta is not reported as beating length -- Before `end`, lr/raw ranges 0.420–0.550 over a, b; 0 of 2 uncorrected CIs sit above 0.5, and the smallest primary p against length is 0.00 (Holm 0.03): no early signal beyond length. At a the probe is significantly *below* length, likely a small-sample CV artifact, not an inverse signal.
+ok   significant positive delta is reported as beating length -- Before `end`, lr/raw ranges 0.420–0.550 over a, b; 0 of 2 uncorrected CIs sit above 0.5, and the smallest primary p against length is 0.00 (Holm 0.01): hidden states beat length early, at b. At a the probe is significantly *below* length, likely a small-sample CV artifact, not an inverse signal.
+ok   run.py --layers 12 --exploratory exits cleanly
+ok   extra layers write to their own dir, not over the default run
+ok   summary flagged exploratory
+ok   population.json records the flag
+ok   layer 20 kept alongside 12 -- ['12', '20', 'none']
+
+all passed

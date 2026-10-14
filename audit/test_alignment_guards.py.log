@@ -1,0 +1,6 @@
+prompt check: 2 explicit prompts match vLLM inputs; historical generation remains separately audited
+............
+----------------------------------------------------------------------
+Ran 12 tests in 0.004s
+
+OK
