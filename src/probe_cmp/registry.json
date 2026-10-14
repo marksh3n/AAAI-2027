@@ -1,0 +1,41 @@
+{
+  "_doc": [
+    "One entry per acts/meta pair. data.py builds the checkpoint list from whichever entries have both files present;",
+    "a new extraction is added by appending an entry here, not by editing code. Check a new pair first with",
+    "python src/probe_cmp/validate.py --source <name>  (or --acts/--meta/--kind for a file not yet registered).",
+    "kind: 'position' = one row per (trace, checkpoint) at an absolute count of generated tokens observed (pos_col);",
+    "      'end' = one row per trace at its last generated token.",
+    "name_col (optional, position kind): column holding the checkpoint label, e.g. a fraction; defaults to pos_col.",
+    "token_index: 'pos-1' = state at trace token index pos-1, i.e. after pos tokens (extract.py EXTRACTOR_VERSION 2);",
+    "             'answer_end' = last token whose start offset lies after </think> (extract.py steps mode, last step).",
+    "layer_convention: 'hidden_states[l+1]' = layer l is HF output_hidden_states[l + 1]; l=-1 is the embedding output,",
+    "                  l=27 is the final hidden state after the model's last RMSNorm.",
+    "prefix: 'meta:<col>' = text up to the checkpoint stored in that meta column; 'trace' = full trace text (end only);",
+    "        'tokenize' = decode the first pos tokens of the retokenized trace (needs transformers)."
+  ],
+  "traces": "traces_B.jsonl",
+  "hidden_dim": 1536,
+  "sources": [
+    {
+      "name": "B_fixed",
+      "acts": "acts_B.npy",
+      "meta": "meta_B.parquet",
+      "kind": "position",
+      "pos_col": "pos",
+      "layers": [-1, 0, 4, 8, 12, 16, 20, 24, 27],
+      "layer_convention": "hidden_states[l+1]",
+      "token_index": "pos-1",
+      "prefix": "meta:prefix"
+    },
+    {
+      "name": "BS_end",
+      "acts": "acts_BS_last.npy",
+      "meta": "meta_BS_last.parquet",
+      "kind": "end",
+      "layers": [-1, 0, 4, 8, 12, 16, 20, 24, 27],
+      "layer_convention": "hidden_states[l+1]",
+      "token_index": "answer_end",
+      "prefix": "trace"
+    }
+  ]
+}
