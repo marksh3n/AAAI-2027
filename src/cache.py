@@ -119,6 +119,7 @@ def write_dataset_manifest(meta_path, acts_path, cfg, cfg_hash, trace_ids, acts_
         "acts_shape": list(acts_shape),
         "acts_path": os.path.basename(acts_path),
         "row_order_hash": sha_obj(list(trace_ids)),
+        "meta_sha256": sha_file(meta_path),
         "acts_sha256": sha_file(acts_path) if strict else None,
         "written": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -140,14 +141,21 @@ def check_dataset_manifest(meta_path, acts_path, trace_ids, acts_shape, strict=F
         )
     m = json.load(open(path))
     problems = []
+    if not m.get("meta_sha256"):
+        problems.append("legacy manifest has no metadata hash; re-extract or independently verify before adopting")
+    elif m["meta_sha256"] != sha_file(meta_path):
+        problems.append("metadata contents changed since the manifest was written")
     if m["n_rows"] != len(trace_ids):
         problems.append(f"meta has {len(trace_ids)} rows, manifest recorded {m['n_rows']}")
     if list(m["acts_shape"]) != list(acts_shape):
         problems.append(f"acts is {list(acts_shape)}, manifest recorded {m['acts_shape']}")
     if m["row_order_hash"] != sha_obj(list(trace_ids)):
         problems.append("meta's trace_id order differs from the one acts.npy was concatenated in")
-    if strict and m.get("acts_sha256") and m["acts_sha256"] != sha_file(acts_path):
-        problems.append("acts.npy contents changed since the manifest was written")
+    if strict:
+        if not m.get("acts_sha256"):
+            problems.append("strict validation requires an activation hash in the manifest")
+        elif m["acts_sha256"] != sha_file(acts_path):
+            problems.append("acts.npy contents changed since the manifest was written")
     if problems:
         raise StaleCache(
             "acts and meta are from different runs:\n  "
