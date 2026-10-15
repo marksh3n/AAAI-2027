@@ -21,7 +21,18 @@ not evidence it holds the right activations. Every parts directory carries a
 `meta*.manifest.json` binding the two together; `probe.py` and `probe_fixed.py` refuse to
 run on a pair that cannot be shown to come from one extraction under one config.
 
-Nothing is ever deleted: a refused cache is moved to `<dir>.stale-<timestamp>`.
+Dataset manifests now bind the metadata file bytes as well as row order. Metadata
+changes are rejected even without `--strict`; strict validation additionally requires
+and checks an activation hash. Legacy manifests without a metadata hash are refused.
+Re-extract or independently verify their alignment before adopting them; adding a
+hash alone is not evidence that an old metadata/activation pair was correct.
+
+The probe-comparison prediction cache also binds labels, problem IDs, exact fold maps,
+registry and input-file contents, analysis source code, and dependency versions. A
+data correction or implementation change invalidates saved predictions.
+
+Refused caches are not deleted. `--rebuild` moves old parts to
+`<dir>.stale-<timestamp>` before rebuilding.
 
 ```bash
 # normal run: reuses whatever the manifest can validate, extracts the rest
@@ -40,6 +51,7 @@ python src/probe_fixed.py --tag B --strict
 
 # tests are plain scripts, no pytest; each exits non-zero on failure
 python tests/test_cache.py       # manifest and stale-reuse paths
+python tests/test_provenance.py  # metadata swaps and prediction-cache input changes
 python tests/test_ablation.py    # yield table and TR vs TRH on planted signal
 python tests/test_positions.py   # --positions scoping and per-run output files
 python tests/test_recover.py     # recover.py logic, with torch/vLLM stubbed
