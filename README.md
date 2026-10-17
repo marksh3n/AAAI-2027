@@ -45,6 +45,7 @@ python tests/test_positions.py   # --positions scoping and per-run output files
 python tests/test_recover.py     # recover.py logic, with torch/vLLM stubbed
 python tests/test_recovery.py    # src/recovery logic: prefixes, scoring, resume, temp MLE
 python tests/test_slip_scan.py   # injection gate 1: claim detection, skips, load-bearing flags
+python tests/test_inject.py      # injection gate 2: matched edit sites, pairing, report metrics
 python tests/test_ceiling.py     # r(t) ceiling vs probes: pooling, alignment, AUROC, paired deltas
 python tests/test_probe_cmp.py   # probe comparison across checkpoints, synthetic data
 ```

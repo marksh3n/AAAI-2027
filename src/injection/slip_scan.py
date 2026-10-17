@@ -370,13 +370,18 @@ def forms(v):
     return out
 
 
-def occurrences(text, v, lo, hi):
-    n = 0
+def spans(text, v, lo, hi):
+    # (start, end) of each place v is written in text[lo:hi], sorted
+    out = []
     for f in forms(v):
         # whole numbers only: 23 is not inside 23,375 or 1{,}023
-        n += len(re.findall(rf"(?<![\d.])(?<!\d,)(?<!\{{,\}}){re.escape(f)}(?!\d|[.,]\d|\{{,\}})",
-                            text[lo:hi]))
-    return n
+        out += [(m.start() + lo, m.end() + lo) for m in
+                re.finditer(rf"(?<![\d.])(?<!\d,)(?<!\{{,\}}){re.escape(f)}(?!\d|[.,]\d|\{{,\}})", text[lo:hi])]
+    return sorted(out)
+
+
+def occurrences(text, v, lo, hi):
+    return len(spans(text, v, lo, hi))
 
 
 def fmt(v):
