@@ -13,8 +13,15 @@
 # untruncated), not monitoring. restart under random flagging carries the same selection, so every
 # gain is also reported over random flagging at the same q, which is the monitor's value.
 # ties in a score are flagged fractionally (the expected value of a random tie-break).
+# --length-matched: the control fails on the raw rollouts (2026-10-20: oracle r_hat resample -3.1 pp at
+# 512, q=0.5), because the sources were selected on their own future (untruncated, >= 4096 tokens) and
+# the rollouts were not. this keeps only continuations whose whole trajectory would have passed the
+# same selection: finished, closes </think> (in the continuation or already in the prefix), at least
+# MIN_LEN tokens in all and under the source budget MAX_NEW (the rollouts ran max_tokens 32768 past
+# the cut). halves are re-dealt over the kept samples; a prefix with < 2 left, or a problem whose t0
+# has < 2 left, is dropped and logged.
 #   python src/probe_cmp/oracle.py --rollouts <recovery_ceiling> --traces data/traces_B.jsonl \
-#       [--preds <probe_cmp out>/preds] --out <dir>
+#       [--preds <probe_cmp out>/preds] [--length-matched] --out <dir>
 import argparse, json, os
 import numpy as np
 import pandas as pd
@@ -26,6 +33,10 @@ RATES = (0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0)
 SHOW = (0.1, 0.2, 0.3, 0.5)
 PROBE_ARMS = [("lr/raw", 20), ("hgb/svd50", 20), ("len", -999), ("tfidf", -999)]
 N_BOOT = 2000
+MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"  # generate.MODEL, not imported: it pulls in torch
+MIN_LEN = 4096  # ceiling population: retokenized source length >= the deepest cut
+MAX_NEW = 32768  # tag-B budget for the whole trace
+THINK_END = "</think>"
 
 
 def load_samples(path):
@@ -43,11 +54,51 @@ def load_samples(path):
             last[(r["prefix_id"], r["round"], s["sample_idx"])] = {
                 "prefix_id": r["prefix_id"], "round": r["round"], "sample_idx": s["sample_idx"],
                 "problem_id": r["problem_id"], "trace_id": r["trace_id"], "checkpoint": r["checkpoint"],
-                "correct": bool(s["correct"]), "n_gen": int(s["n_gen"])}
-    df = pd.DataFrame(list(last.values())).sort_values(["prefix_id", "round", "sample_idx"])
+                "correct": bool(s["correct"]), "n_gen": int(s["n_gen"]), "truncated": bool(s.get("truncated")),
+                "think": THINK_END in (s.get("text") or "")}
+    df = pd.DataFrame(list(last.values()))
+    df["cut"] = df.checkpoint.map(lambda c: int(CKPTS.get(c, 0)))  # t0 = 0
+    return deal(df), torn
+
+
+def deal(df):
     # half 0 / half 1 alternate in sample order, so each half of a K=8 prefix holds 4
+    df = df.sort_values(["prefix_id", "round", "sample_idx"]).reset_index(drop=True)
     df["half"] = df.groupby("prefix_id").cumcount() % 2
-    return df.reset_index(drop=True), torn
+    return df
+
+
+def think_tokens(traces, ids, tokenizer):
+    # token index of the source's </think>, so a prefix holds it when that index < cut
+    out = {}
+    for tid in ids:
+        text = traces.at[tid, "text"]
+        i = text.find(THINK_END)
+        out[tid] = len(tokenizer(text[:i], add_special_tokens=False)["input_ids"]) if i >= 0 else np.inf
+    return out
+
+
+def length_match(samples, think_tok, log=print):
+    # keep continuations whose trajectory passes the population's own selection; see the header
+    # n_gen counts the EOS on a stop, the retokenized source length does not, hence the -1
+    total = samples.cut + samples.n_gen
+    closed = samples.think | (samples.trace_id.map(think_tok).fillna(np.inf) < samples.cut)
+    keep = ~samples.truncated & closed & (total - 1 >= MIN_LEN) & (total < MAX_NEW)
+    for c, g in samples.assign(keep=keep).groupby("checkpoint"):
+        log(f"  length match {c}: kept {g.keep.mean():.1%} of {len(g)} continuations "
+            f"(truncated {g.truncated.mean():.1%}, short {((g.cut + g.n_gen - 1 < MIN_LEN) & ~g.truncated).mean():.1%}, "
+            f"over budget {((g.cut + g.n_gen >= MAX_NEW) & ~g.truncated).mean():.1%}); "
+            f"accuracy {g.correct.mean():.3f} -> {g[g.keep].correct.mean():.3f}")
+    kept = samples[keep]
+    n = kept.groupby("prefix_id").size()
+    thin = set(samples.prefix_id.unique()) - set(n.index[n >= 2])
+    t0 = samples[samples.checkpoint == "t0"].drop_duplicates("prefix_id")
+    lost = set(t0.problem_id[t0.prefix_id.isin(thin)])
+    if thin:
+        log(f"  length match: {len(thin)} prefixes left with < 2 continuations, dropped; "
+            f"{len(lost)} problems lose their t0 and are dropped whole: {sorted(lost)}")
+    kept = kept[~kept.prefix_id.isin(thin) & ~kept.problem_id.isin(lost)]
+    return deal(kept.copy())
 
 
 def half_stats(samples):
@@ -76,6 +127,8 @@ def table(samples, traces, ckpt):
             row[f"rp{h}"], row[f"Lp{h}"] = hs.at[pid, ("r", h)], hs.at[pid, ("L", h)]
             row[f"rt{h}"], row[f"Lt{h}"] = hs.at[t0[prob], ("r", h)], hs.at[t0[prob], ("L", h)]
         rows.append(row)
+    if not rows:
+        return pd.DataFrame()  # no prefixes at this cut
     return pd.DataFrame(rows).sort_values(["problem_id", "trace_id"]).reset_index(drop=True)
 
 
@@ -141,7 +194,7 @@ def summarize(t, acc, tok, base_acc, draws):
             "boot_over": draws @ (sa - sb) / den, "d_tokens": tok.mean(), "boot_tok": draws @ st / den}
 
 
-def run(samples, traces, preds_dir=None, out=None, log=print, n_boot=N_BOOT):
+def run(samples, traces, preds_dir=None, out=None, log=print, n_boot=N_BOOT, note=None):
     rows = []
     for ckpt in CKPTS:
         t = table(samples, traces, ckpt)
@@ -184,17 +237,17 @@ def run(samples, traces, preds_dir=None, out=None, log=print, n_boot=N_BOOT):
     if out:
         os.makedirs(out, exist_ok=True)
         res.to_csv(os.path.join(out, "oracle_curve.csv"), index=False)
-        md = report(res)
+        md = report(res, note)
         open(os.path.join(out, "oracle_summary.md"), "w").write(md)
         log("\n" + md)
         plot(res, out)
     return res
 
 
-def report(res):
+def report(res, note=None):
     pp = lambda v: f"{100 * v:+.1f}"
     cell = lambda r: f"{pp(r.over_random)} [{pp(r.over_ci_low)}, {pp(r.over_ci_high)}]"
-    lines = ["# Oracle-r_hat intervention upper bound\n",
+    lines = ["# Oracle-r_hat intervention upper bound\n"] + ([f"> {note}\n"] if note else []) + [
              "- A monitor flags a share q of traces at the cut; each flagged trace is replaced. **restart**: a fresh "
              "sample from the prompt, scored by the problem's t0 rollouts. **resample**: a fresh continuation of the same "
              "prefix, scored by that prefix's rollouts. Unflagged traces keep their own outcome.",
@@ -268,11 +321,25 @@ def main():
     ap.add_argument("--rollouts", required=True, help="rollouts.jsonl from the Modal ceiling run")
     ap.add_argument("--traces", default="data/traces_B.jsonl")
     ap.add_argument("--preds", default=None, help="optional preds/ of the <=4096 probe_cmp run: probe monitors")
+    ap.add_argument("--length-matched", action="store_true",
+                    help="keep only continuations that pass the population's selection (needs the tokenizer)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     samples, torn = load_samples(a.rollouts)
     print(f"{len(samples)} continuations over {samples.prefix_id.nunique()} prefixes; torn lines skipped: {torn}")
-    run(samples, load_traces(a.traces), a.preds, a.out)
+    traces, note = load_traces(a.traces), None
+    if a.length_matched:
+        from transformers import AutoTokenizer
+        ids = samples.trace_id.dropna().unique()
+        samples = length_match(samples, think_tokens(traces, ids, AutoTokenizer.from_pretrained(MODEL)))
+        note = (f"**Length-matched.** Only continuations whose whole trajectory passes the population's selection "
+                f"(finished, </think> closed, >= {MIN_LEN} and < {MAX_NEW} tokens in all); halves re-dealt over them. "
+                f"The resample control should now sit at 0. Restart here is a like-for-like comparison, not a "
+                f"deployable gain: a fresh sample counts only if it too runs long, which no monitor can choose; the "
+                f"raw run is the deployable reading. Prefixes or problems with < 2 kept samples are dropped, so "
+                f"check the trace counts per cut.")
+        print(f"length matched: {len(samples)} continuations over {samples.prefix_id.nunique()} prefixes")
+    run(samples, traces, a.preds, a.out, note=note)
 
 
 if __name__ == "__main__":

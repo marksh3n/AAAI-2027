@@ -106,5 +106,70 @@ try:
 except SystemExit:
     check("missing t0 refused", True)
 
+# 5. length match: the keep rule on hand-built continuations
+S = pd.DataFrame([
+    # prefix, problem, trace, ckpt, cut, n_gen, truncated, think, expected keep
+    ("a", 0, "A", "p512", 512, 5000, False, True, True),
+    ("a", 0, "A", "p512", 512, 3584, False, True, False),   # 512 + 3584 - 1 = 4095 tokens: short
+    ("a", 0, "A", "p512", 512, 3585, False, True, True),    # exactly 4096
+    ("a", 0, "A", "p512", 512, 32256, False, True, False),  # 512 + 32256 = 32768: over the source budget
+    ("a", 0, "A", "p512", 512, 32256, True, True, False),   # truncated
+    ("a", 0, "A", "p512", 512, 5000, False, False, False),  # never closes </think>
+    ("b", 0, "B", "p4096", 4096, 500, False, False, True),  # </think> already in B's prefix
+    ("b", 0, "B", "p4096", 4096, 600, False, False, True),
+    ("t", 0, None, "t0", 0, 5000, False, True, True),
+    ("t", 0, None, "t0", 0, 4000, False, True, False),
+    ("t", 0, None, "t0", 0, 6000, False, True, True),
+], columns=["prefix_id", "problem_id", "trace_id", "checkpoint", "cut", "n_gen", "truncated", "think", "want"])
+S["round"], S["sample_idx"], S["correct"] = 0, range(len(S)), True
+kept = O.length_match(S.drop(columns="want"), {"A": 9000, "B": 3000}, log=lambda *_: None)
+want = S[S.want]
+check("length match: keep rule (length, budget, truncation, </think> in prefix or continuation)",
+      sorted(kept.sample_idx) == sorted(want.sample_idx), sorted(kept.sample_idx))
+check("length match: halves re-dealt over kept samples", (kept.groupby("prefix_id").half.apply(list) ==
+      pd.Series({"a": [0, 1], "b": [0, 1], "t": [0, 1]})).all())
+thin = O.length_match(S[S.sample_idx != 10].drop(columns="want"), {"A": 9000, "B": 3000}, log=lambda *_: None)
+check("length match: a t0 left with < 2 drops its problem", thin.empty)
+
+# 6. sources selected on their own future: a trace is kept only if it runs >= 4096 tokens, and wrong
+# continuations run long more often. the raw resample control then goes negative (flagging low-r
+# prefixes skips the high-r ones, where selection pushed the source furthest below r); matching the
+# continuations to the same selection brings it back to 0
+def selected(seed, K=16, long_wrong=0.9, long_right=0.2):
+    rng = np.random.default_rng(seed)
+    traces, rows = [], []
+    for pid in range(80):
+        for j in range(6):
+            tid, r = f"{pid}_{j}", rng.uniform(0, 1)
+            ok = bool(rng.random() < r * long_right / (r * long_right + (1 - r) * long_wrong))  # given long
+            traces.append({"trace_id": tid, "problem_id": pid, "is_correct": ok, "n_gen": 6000, "text": "x</think>",
+                           "trunc": False, "answer": "1"})
+            sm = []
+            for i in range(K):
+                c = bool(rng.random() < r)
+                long = rng.random() < (long_right if c else long_wrong)
+                sm.append({"sample_idx": i, "correct": c, "n_gen": (6000 if long else 3000) - 512,
+                           "truncated": False, "text": "</think>"})
+            rows.append({"prefix_id": f"ceil/{tid}/p512", "round": 0, "problem_id": pid, "trace_id": tid,
+                         "checkpoint": "p512", "samples": sm})
+        rows.append({"prefix_id": f"ceil/{pid}/t0", "round": 0, "problem_id": pid, "trace_id": None,
+                     "checkpoint": "t0", "samples": [{"sample_idx": i, "correct": i % 2 == 0, "n_gen": 5000,
+                                                      "truncated": False, "text": "</think>"} for i in range(K)]})
+    dd = tempfile.mkdtemp()
+    rp, tp = os.path.join(dd, "r.jsonl"), os.path.join(dd, "t.jsonl")
+    open(rp, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+    open(tp, "w").write("\n".join(json.dumps(t) for t in traces) + "\n")
+    return O.load_samples(rp)[0], load_traces(tp)
+
+
+smp, trc = selected(2)
+ctl = lambda df: (lambda r: r[(r.action == "resample") & (r.score == "oracle r_hat (low prefix r first)") & (r.q == 0.5)]
+                  .iloc[0])(O.run(df, trc, log=lambda *_: None, n_boot=500))
+raw, matched = ctl(smp), ctl(O.length_match(smp, {}, log=lambda *_: None))
+check("selected sources: raw resample control is negative", raw.over_ci_high < 0,
+      f"{raw.over_random:+.3f} [{raw.over_ci_low:+.3f}, {raw.over_ci_high:+.3f}]")
+check("selected sources: length-matched control contains 0", matched.over_ci_low < 0 < matched.over_ci_high,
+      f"{matched.over_random:+.3f} [{matched.over_ci_low:+.3f}, {matched.over_ci_high:+.3f}]")
+
 print(f"\n{len(fails)} failure(s)" + (f": {fails}" if fails else ""))
 sys.exit(1 if fails else 0)
