@@ -35,18 +35,26 @@
 # selection: finished, closes </think> (in the continuation or already in the prefix), at least MIN_LEN
 # tokens in all. halves are re-dealt over the kept samples; a prefix with < 2 left, or a problem whose
 # t0 has < 2 left, is dropped and logged.
+# probes, length and tf-idf are reported at pre-fixed q (PROBE_Q), every cell, with Holm over the family
+# probes x cuts x q of each arm under selection-free scoring. the Holm input is a Wald p from the
+# bootstrap SE: the percentile bootstrap p cannot go below 2/(B+1), which times a 63-cell family is
+# above 0.05 at B=2000, so no cell could pass however strong; oracle rows also show their best q, an
+# upper bound since q is picked on the same data. with --preds each cohort also gets the within-problem
+# AUROC of r_hat vs the probes (ceiling.compare) and headline.png: gain over random flagging vs cut at
+# each pre-fixed q, for oracle restart / backtrack, the label oracle and the primary probe (L20 lr/raw),
+# with the other probes as a band.
 #   python src/probe_cmp/oracle.py --rollouts <recovery_ceiling> --traces data/traces_B.jsonl \
 #       [--preds <probe_cmp out>/preds] [--length-matched] [--problems all main] --out <dir>
-import argparse, json, os
+import argparse, json, math, os
 import numpy as np
 import pandas as pd
 
 import stats as S
-from ceiling import CKPTS, load_preds, load_traces
+from ceiling import ARMS as PROBE_ARMS, CKPTS, compare, load_preds, load_traces
 
-RATES = (0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0)
-SHOW = (0.1, 0.2, 0.3, 0.5)
-PROBE_ARMS = [("lr/raw", 20), ("hgb/svd50", 20), ("len", -999), ("tfidf", -999)]
+RATES = (0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1.0)
+PROBE_Q = (0.1, 0.25, 0.5)  # pre-fixed before the probe rows were looked at; also the table columns
+PRIMARY = "lr/raw L20"  # the pre-declared primary probe
 N_BOOT = 2000
 MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"  # generate.MODEL, not imported: it pulls in torch
 MIN_LEN = 4096  # ceiling population: retokenized source length >= the deepest cut
@@ -54,7 +62,7 @@ MAX_NEW = 32768  # tag-B budget for the whole trace
 THINK_END = "</think>"
 PILOT_LINES = 480  # traces_B lines sampled with one BOS
 PREV = {"p2048": "p512", "p4096": "p2048"}  # backtrack target; at p512 it would be t0, i.e. restart
-ARMS = {"restart": "t", "backtrack": "b", "resample": "p"}  # column suffix of each arm's replacement
+ARM_COL = {"restart": "t", "backtrack": "b", "resample": "p"}  # column suffix of each arm's replacement
 SCORINGS = {"selection-free": ("restart", "backtrack"), "outcome": ("restart", "backtrack", "resample")}
 COHORT = "matched cohort: traces reaching 4096 tokens and finishing, mixed problems only"
 
@@ -195,7 +203,7 @@ def flag_weights(score, q):
 def gains(t, action, e, scoring="outcome"):
     # per trace, replacing it scored on half e: accuracy change and extra tokens. an arm spends the cut
     # (discarded) plus its replacement; the baseline is the trace kept
-    a = ARMS[action]
+    a = ARM_COL[action]
     r, L = t[f"r{a}{e}"], t[f"L{a}{e}"]
     if scoring == "outcome":
         base_r, base_tok = 1 - t.y, t.src_tokens
@@ -228,6 +236,12 @@ def policy(t, score_fn, action, q, scoring="outcome"):
         tok += w * dt / 2
         flag += w / 2
     return acc, tok, flag
+
+
+def wald_p(est, boot):
+    # two-sided p from the bootstrap SE; not floored by the number of draws, unlike stats.boot_p
+    se = np.nanstd(boot, ddof=1)
+    return 1.0 if se == 0 else math.erfc(abs(est) / se / math.sqrt(2))
 
 
 def summarize(t, acc, tok, base_acc, draws):
@@ -281,27 +295,58 @@ def run(samples, traces, preds_dir=None, out=None, log=print, n_boot=N_BOOT, not
                         s = summarize(t, acc, tok, rand_acc, draws)
                         lo, hi = S.ci(s["boot"])
                         olo, ohi = S.ci(s["boot_over"])
+                        kind = ("random" if fn is None else "oracle" if name.startswith("oracle")
+                                else "label" if name.startswith("label") else "probe")
                         rows.append({"cohort": label, "checkpoint": CKPTS[ckpt], "scoring": scoring,
-                                     "action": action, "score": name, "q": q, "flagged": flag.mean(),
+                                     "action": action, "score": name, "kind": kind, "q": q, "flagged": flag.mean(),
                                      "source_acc": src_acc, "r_prefix": t[["rp0", "rp1"]].values.mean(),
                                      "d_acc": s["d_acc"], "ci_low": lo, "ci_high": hi,
                                      "over_random": s["over_random"], "over_ci_low": olo, "over_ci_high": ohi,
                                      "over_p": S.boot_p(s["boot_over"]) if fn is not None else np.nan,
+                                     "over_p_wald": wald_p(s["over_random"], s["boot_over"]) if fn is not None else np.nan,
                                      "d_tokens_per_trace": s["d_tokens"],
                                      "src_tokens_per_trace": t.src_tokens.mean(),
                                      "traces": len(t), "problems": t.problem_id.nunique()})
     res = pd.DataFrame(rows)
+    res["holm_p"] = np.nan
+    # one family per arm under selection-free scoring: every probe x cut x pre-fixed q
+    fam = res[(res.scoring == "selection-free") & (res.kind == "probe") & res.q.isin(PROBE_Q)]
+    for _, g in fam.groupby("action"):
+        res.loc[g.index, "holm_p"] = S.holm(g.over_p_wald.values)
+    auc = auroc_table(samples, traces, preds_dir, n_boot) if preds_dir else None
     if out:
         os.makedirs(out, exist_ok=True)
         res.to_csv(os.path.join(out, "oracle_curve.csv"), index=False)
-        md = report(res, note, label)
+        if auc is not None:
+            auc.to_csv(os.path.join(out, "auroc.csv"), index=False)
+        md = report(res, note, label, auc)
         open(os.path.join(out, "oracle_summary.md"), "w").write(md)
         log("\n" + md)
         plot(res, out)
+        headline(res, out, label)
     return res
 
 
-def report(res, note=None, label="all problems"):
+def auroc_table(samples, traces, preds_dir, n_boot=N_BOOT):
+    # within-problem AUROC of r_hat (all K samples, the source budget applied) vs every probe, per cut
+    rows = []
+    for ckpt in CKPTS:
+        s = samples[samples.checkpoint == ckpt]
+        if not len(s):
+            continue
+        sub = s.groupby("prefix_id").agg(trace_id=("trace_id", "first"), problem_id=("problem_id", "first"),
+                                         r=("correct", "mean"), k=("correct", "sum"),
+                                         fin=("truncated", lambda x: (~x).sum())).reset_index()
+        sub["r_finished"] = (sub.k / sub.fin.replace(0, np.nan)).fillna(sub.r)
+        sub["y"] = traces.loc[sub.trace_id, "y"].values
+        t, _ = compare(sub, load_preds(os.path.join(preds_dir, f"{CKPTS[ckpt]}.parquet")), n_boot)
+        t = t[t.score != "r_hat finished"]
+        t.insert(0, "checkpoint", CKPTS[ckpt])
+        rows.append(t)
+    return pd.concat(rows, ignore_index=True)
+
+
+def report(res, note=None, label="all problems", auc=None):
     pp = lambda v: f"{100 * v:+.1f}"
     cell = lambda r: f"{pp(r.over_random)} [{pp(r.over_ci_low)}, {pp(r.over_ci_high)}]"
     sizes = res.drop_duplicates("checkpoint")
@@ -330,19 +375,45 @@ def report(res, note=None, label="all problems"):
               "- Accuracy in pp of the cohort. Tokens = extra tokens per trace: an arm spends the cut (discarded) plus "
               "its replacement, minus the baseline (cut + held-out continuation length; the source's own length under "
               "outcome scoring). Continuations reaching 32768 tokens in all count as truncated. CIs: problem bootstrap.\n"]
+    if auc is not None:
+        lines.append(f"## Within-problem AUROC, P(wrong) [95% CI] ({tag})\n")
+        lines.append("| checkpoint | score | AUROC [95% CI] | r_hat − score [95% CI] | pairs |")
+        lines.append("|---|---|---|---|---|")
+        for r in auc.itertuples():
+            d = "–" if r.score == "r_hat" else f"{r.delta_r_hat_minus:+.3f} [{r.delta_ci_low:+.3f}, {r.delta_ci_high:+.3f}]"
+            lines.append(f"| {r.checkpoint} | {r.score} | {r.auroc:.3f} [{r.ci_low:.3f}, {r.ci_high:.3f}] | {d} | {r.n_pairs} |")
+        lines.append("")
     for scoring, actions in SCORINGS.items():
         for action in actions:
             g = res[(res.scoring == scoring) & (res.action == action)]
             if not len(g):
                 continue
             lines.append(f"## {action}, {scoring} scoring: value over random flagging, pp [95% CI] ({tag})\n")
-            lines.append("| checkpoint | score | " + " | ".join(f"q={q}" for q in SHOW) + " | best q: pp (tokens/trace) |")
-            lines.append("|---|---|" + "---|" * len(SHOW) + "---|")
-            for (c, name), h in g[g.score != "random"].groupby(["checkpoint", "score"], sort=False):
+            lines.append("Oracle and label rows; *best q* is the maximum over q, an upper bound (q picked on the same data).\n")
+            lines.append("| checkpoint | score | " + " | ".join(f"q={q}" for q in PROBE_Q) + " | best q, upper bound: pp (tokens/trace) |")
+            lines.append("|---|---|" + "---|" * len(PROBE_Q) + "---|")
+            for (c, name), h in g[g.kind.isin(["oracle", "label"])].groupby(["checkpoint", "score"], sort=False):
                 h = h.set_index("q")
                 best = h.over_random.idxmax()
-                lines.append(f"| {c} | {name} | " + " | ".join(cell(h.loc[q]) for q in SHOW) +
+                lines.append(f"| {c} | {name} | " + " | ".join(cell(h.loc[q]) for q in PROBE_Q) +
                              f" | {pp(h.at[best, 'over_random'])} at q={best} ({h.at[best, 'd_tokens_per_trace']:+,.0f}) |")
+            holm = scoring == "selection-free"
+            lines.append("\nProbes, length and tf-idf at the pre-fixed q, every cell"
+                         + ("; after each cell, the Holm-adjusted p over this arm's probes x cuts x q (Wald p from the "
+                            "bootstrap SE, so not floored by the number of draws)." if holm else ".")
+                         + "\n")
+            lines.append("| checkpoint | score | " + " | ".join(f"q={q}" for q in PROBE_Q) + " |")
+            lines.append("|---|---|" + "---|" * len(PROBE_Q))
+            for (c, name), h in g[g.kind == "probe"].groupby(["checkpoint", "score"], sort=False):
+                h = h.set_index("q")
+                lines.append(f"| {c} | {name} | " + " | ".join(
+                    cell(h.loc[q]) + (f" (p_Holm {h.at[q, 'holm_p']:.2f})" if holm else "") for q in PROBE_Q) + " |")
+            if holm:
+                fam = g[(g.kind == "probe") & g.q.isin(PROBE_Q)]
+                sig = fam[fam.holm_p < 0.05]
+                lines.append(f"\nProbe cells with Holm p < 0.05: {len(sig)} of {len(fam)}"
+                             + (": " + ", ".join(f"{r.score} @ {r.checkpoint}, q={r.q}" for r in sig.itertuples())
+                                if len(sig) else "") + ".")
             rnd = g[g.score == "random"].set_index(["checkpoint", "q"])
             lines.append("\nRandom flagging itself (accuracy change, pp; tokens/trace): " + "; ".join(
                 f"{c} q={q}: {pp(rnd.at[(c, q), 'd_acc'])} ({rnd.at[(c, q), 'd_tokens_per_trace']:+,.0f})"
@@ -397,6 +468,61 @@ def plot(res, out):
     plt.close(fig)
 
 
+def headline_lines(res):
+    # the figure's data, selection-free: oracle restart / backtrack, label oracle and the primary probe
+    # (all restart unless named), and the band over every other probe's point estimate (restart)
+    sf = res[(res.scoring == "selection-free") & res.q.isin(PROBE_Q)]
+    pick = lambda action, score: sf[(sf.action == action) & (sf.score == score)]
+    lines = {"oracle restart (r_t0 - r_prefix)": pick("restart", "oracle advantage (r_t0 - r_prefix)"),
+             "oracle backtrack (r_prev - r_prefix)": pick("backtrack", "oracle advantage (r_prev - r_prefix)"),
+             "label oracle, restart": pick("restart", "label oracle (source wrong first)"),
+             f"{PRIMARY} (primary probe), restart": pick("restart", PRIMARY)}
+    others = sf[(sf.action == "restart") & (sf.kind == "probe") & (sf.score != PRIMARY)]
+    band = others.groupby(["q", "checkpoint"]).over_random.agg(["min", "max"]).reset_index()
+    return lines, band, sorted(others.score.unique())
+
+
+def headline(res, out, label):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    lines, band, others = headline_lines(res)
+    cks = [c for c in CKPTS.values() if c in set(res.checkpoint)]
+    x = {c: i for i, c in enumerate(cks)}
+    style = {"oracle restart": ("#0e6b66", "-o"), "oracle backtrack": ("#3b7dd8", "-s"),
+             "label oracle": ("#7a7a7a", "--^"), PRIMARY: ("#b4541f", "-D")}
+    fig, axes = plt.subplots(1, len(PROBE_Q), figsize=(4.3 * len(PROBE_Q), 3.9), dpi=150, sharey=True, squeeze=False)
+    for ax, q in zip(axes[0], PROBE_Q):
+        b = band[band.q == q].set_index("checkpoint").reindex(cks)
+        ax.fill_between(range(len(cks)), 100 * b["min"], 100 * b["max"], color="#b4541f", alpha=0.13, lw=0,
+                        label=f"range of other probes ({len(others)}), restart")
+        for name, g in lines.items():
+            g = g[g.q == q]
+            if not len(g):
+                continue
+            color, fmt = next(v for k, v in style.items() if name.startswith(k))
+            xs = np.array([x[c] for c in g.checkpoint]) + (0.06 if "backtrack" in name else 0)
+            ax.errorbar(xs, 100 * g.over_random, yerr=[100 * (g.over_random - g.over_ci_low),
+                                                       100 * (g.over_ci_high - g.over_random)],
+                        fmt=fmt, color=color, ms=4, lw=1.6, capsize=3, label=name)
+        ax.axhline(0, color="k", lw=0.8)
+        ax.set_xticks(range(len(cks)), cks)
+        ax.set_xlabel("cut (tokens of the trace read)")
+        ax.set_title(f"q = {q} of traces flagged", fontsize=10, loc="left")
+        ax.grid(axis="y", alpha=0.3)
+    axes[0][0].set_ylabel("accuracy gain over random flagging (pp)")
+    handles, labels = axes[0][-1].get_legend_handles_labels()
+    fig.legend(handles, labels, frameon=False, fontsize=7, loc="lower center", ncol=5, bbox_to_anchor=(0.5, -0.06))
+    fig.suptitle(f"Selection-free gain over random flagging, 95% CIs; {COHORT}; {label}. "
+                 f"Under the rollout sampler (source-vs-rollout gap unexplained).", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out, "headline.png"), bbox_inches="tight")
+    plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rollouts", required=True, help="rollouts.jsonl from the Modal ceiling run")
@@ -406,6 +532,7 @@ def main():
                     help="keep only continuations that pass the population's selection (needs the tokenizer)")
     ap.add_argument("--problems", nargs="+", default=["all"], choices=["all", "main", "pilot"],
                     help="cohorts to run, each into <out>/<name>: all 87, main block 52 (two BOS), pilot 35 (one BOS)")
+    ap.add_argument("--n-boot", type=int, default=N_BOOT, help="problem-bootstrap draws")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     samples, torn = load_samples(a.rollouts)
@@ -426,7 +553,7 @@ def main():
              "pilot": "pilot block only (one-BOS sources)"}
     for which in a.problems:
         print(f"\n===== {names[which]} =====")
-        run(cohort(samples, traces, which), traces, a.preds, os.path.join(a.out, which), note=note,
+        run(cohort(samples, traces, which), traces, a.preds, os.path.join(a.out, which), n_boot=a.n_boot, note=note,
             label=names[which])
 
 

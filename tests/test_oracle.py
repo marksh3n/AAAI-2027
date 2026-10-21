@@ -130,6 +130,46 @@ check("a trace without its previous prefix leaves every arm at that cut, logged"
       "5_0" not in set(t_gone.trace_id) and len(t_gone) == len(t2048) - 1 and any("5_0" in l for l in logs))
 check("curve csv written", len(pd.read_csv(os.path.join(out, "oracle_curve.csv"))) == len(res))
 
+# 3b. with probe predictions: pre-fixed q, Holm over probes x cuts x q per arm, AUROC table, headline figure.
+# len is perfect (p = wrong), the other arms noise
+pdir = os.path.join(d, "preds")
+os.makedirs(pdir, exist_ok=True)
+rngp = np.random.default_rng(5)
+for c in ("512", "2048", "4096"):
+    pr = []
+    for t in traces:
+        for model, feat, layer in (("lr", "raw", 20), ("lr", "raw", 16), ("lr", "len", -999), ("lr", "tfidf", -999)):
+            y = int(not t["is_correct"])
+            pr.append({"ckpt": c, "layer": layer, "model": model, "feature": feat, "seed": 0, "trace_id": t["trace_id"],
+                       "problem_id": t["problem_id"], "y": y, "p": float(y) if feat == "len" else rngp.random()})
+    pd.DataFrame(pr).to_parquet(os.path.join(pdir, f"{c}.parquet"))
+out2 = os.path.join(d, "out2")
+res2 = O.run(samples, load_traces(tp), preds_dir=pdir, out=out2, log=lambda *_: None, n_boot=300)
+fam = res2[res2.holm_p.notna()]
+check("Holm only on selection-free probe rows at the pre-fixed q",
+      set(fam.scoring) == {"selection-free"} and set(fam.kind) == {"probe"} and set(fam.q) == set(O.PROBE_Q))
+check("Holm family per arm = probes x cuts x q", fam.groupby("action").size().to_dict() == {"restart": 4 * 3 * 3,
+                                                                                         "backtrack": 4 * 2 * 3},
+      fam.groupby("action").size().to_dict())
+check("Holm p never below the raw Wald p", (fam.holm_p >= fam.over_p_wald - 1e-12).all())
+floor = 2 / (300 + 1) * 36  # the smallest Holm p a percentile-bootstrap p could give in a 36-cell family
+check("Holm can pass below the bootstrap-p floor (Wald p from the bootstrap SE)", fam.holm_p.min() < floor,
+      f"min Holm p {fam.holm_p.min():.2g} vs floor {floor:.2g}")
+check("Wald p tracks the bootstrap p where both are informative",
+      np.corrcoef(fam.over_p_wald, fam.over_p)[0, 1] > 0.8, np.corrcoef(fam.over_p_wald, fam.over_p)[0, 1])
+auc = pd.read_csv(os.path.join(out2, "auroc.csv"))
+check("AUROC table: r_hat and every probe at each cut",
+      set(auc.checkpoint.astype(str)) == {"512", "2048", "4096"} and
+      {"r_hat", "lr/raw L20", "lr/raw L16", "len", "tfidf"} <= set(auc.score), sorted(auc.score.unique()))
+check("AUROC table: a perfect score reads 1", np.allclose(auc[auc.score == "len"].auroc, 1.0))
+md2 = open(os.path.join(out2, "oracle_summary.md")).read()
+check("summary shows p_Holm cells and labels best q as an upper bound", "p_Holm" in md2 and "upper bound" in md2)
+check("headline figure written", os.path.getsize(os.path.join(out2, "headline.png")) > 10_000)
+hl, band, others = O.headline_lines(res2)
+check("headline band: every probe but the primary", others == ["len", "lr/raw L16", "tfidf"], others)
+check("headline lines at the pre-fixed q only", all(set(g.q) <= set(O.PROBE_Q) for g in hl.values()))
+check("headline backtrack only at 2048 and 4096", set(hl["oracle backtrack (r_prev - r_prefix)"].checkpoint) == {"2048", "4096"})
+
 # 4. a problem without t0 cannot be scored for restart
 bad = samples[~((samples.checkpoint == "t0") & (samples.problem_id == 3))]
 try:
