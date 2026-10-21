@@ -9,7 +9,10 @@
 # two scorings of what keeping the trace is worth:
 #   selection-free (primary): r(prefix), the held-out rollout estimate. given the prefix, the trace's
 #     own remainder and a rollout are draws from one distribution, so this needs nothing from the source
-#     outcome and is immune to how the population was selected. resample gains exactly 0 here.
+#     outcome and is immune to how the population was selected. resample gains exactly 0 here. it assumes
+#     a rollout continues a prefix as the source sampler would have; if the gap below comes from a sampler
+#     mismatch (pilot block: vLLM 0.28.0, one BOS; rollouts: 0.10.2, two BOS) these numbers describe the
+#     rollout sampler, not the source traces. compare --problems main (same BOS as the rollouts) with all.
 #   outcome: the source's actual outcome. resample is then the control: a prefix-only score cannot gain
 #     from it in expectation, so what it shows is a gap between source outcomes and rollouts. on this
 #     cohort it does not vanish (2026-10-20: -2.3 pp at 512, q=0.5, even with --length-matched), and
@@ -313,9 +316,12 @@ def report(res, note=None, label="all problems"):
               "sample from the prompt (the problem's t0 rollouts). **backtrack**: a fresh continuation from the trace's "
               "previous checkpoint (2048 -> 512, 4096 -> 2048). **resample**: a fresh continuation of the same prefix.",
               "- **Selection-free** scoring (primary) values a kept trace at its prefix's held-out r_hat, so nothing "
-              "depends on the source outcome. **Outcome** scoring uses the source's actual outcome; its resample row "
-              "is the control and it does not sit at 0 on this cohort (a source-vs-rollout gap that length and "
-              "mixed-problem selection do not explain).",
+              "depends on the source outcome or on how the cohort was selected. It assumes a rollout continues a prefix "
+              "as the source sampler would have. **Outcome** scoring uses the source's actual outcome; its resample row "
+              "is the control and it does not sit at 0 on this cohort, a source-vs-rollout gap that length and "
+              "mixed-problem selection do not explain. If that gap is a sampler mismatch (the pilot block was generated "
+              "with vLLM 0.28.0 and one BOS, the rollouts with 0.10.2 and two), selection-free numbers describe the "
+              "rollout sampler, not the source traces; compare the main-block run (same BOS) with all problems.",
               "- Cross-fitted: one half of each prefix's samples ranks, the other half scores replacement and baseline, "
               "then swap. **Value over random** = accuracy change minus that of flagging a random q with the same arm.",
               "- *oracle r_hat* ranks by the prefix's own rollout success; *oracle advantage* by r(replacement) - "
