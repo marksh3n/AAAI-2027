@@ -48,6 +48,8 @@ python tests/test_slip_scan.py   # injection gate 1: claim detection, skips, loa
 python tests/test_inject.py      # injection gate 2: matched edit sites, pairing, report metrics
 python tests/test_ceiling.py     # r(t) ceiling vs probes: pooling, alignment, AUROC, paired deltas
 python tests/test_probe_cmp.py   # probe comparison across checkpoints, synthetic data
+python tests/test_oracle.py      # oracle-r_hat intervention bound: halves, ties, cross-fit, resample control
+python tests/test_reps.py        # representation test: window / last-token arithmetic, planted signal
 ```
 
 `--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a
