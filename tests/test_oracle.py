@@ -77,7 +77,8 @@ check("halves alternate, 4 + 4 per prefix", (samples.groupby(["prefix_id", "half
 
 out = os.path.join(d, "out")
 res = O.run(samples, load_traces(tp), out=out, log=lambda *_: None, n_boot=500)
-get = lambda c, a, s, q: res[(res.checkpoint == c) & (res.action == a) & (res.score == s) & (res.q == q)].iloc[0]
+get = lambda c, a, s, q, sc="outcome": res[(res.checkpoint == c) & (res.action == a) & (res.score == s) & (res.q == q)
+                                           & (res.scoring == sc)].iloc[0]
 ctl = get("2048", "resample", "oracle r_hat (low prefix r first)", 0.3)
 check("resample control: prefix-only oracle has no value over random", ctl.over_ci_low < 0 < ctl.over_ci_high,
       f"{ctl.over_random:+.3f} [{ctl.over_ci_low:+.3f}, {ctl.over_ci_high:+.3f}]")
@@ -95,7 +96,38 @@ check("random restart at q=0.5 moves accuracy halfway to t0", np.isclose(rnd.d_a
 check("random restart tokens: q x (cut + t0 length - source length)",
       np.isclose(rnd.d_tokens_per_trace, 0.5 * (2048 + 5000 - 6000)), rnd.d_tokens_per_trace)
 check("q=1 flags everything", np.allclose(res[res.q == 1.0].flagged, 1))
-check("summary written", "In plain words" in open(os.path.join(out, "oracle_summary.md")).read())
+md = open(os.path.join(out, "oracle_summary.md")).read()
+check("summary written", "In plain words" in md)
+heads = [l for l in md.splitlines() if l.startswith("## ")]
+check("every table labelled as the matched cohort", all(O.COHORT in l for l in heads), heads[:2])
+
+# selection-free scoring: the kept trace is worth its prefix's held-out r_hat, so resample is not run,
+# random restart moves accuracy by q x mean(r_t0 - r_prefix), and the source outcome cannot matter
+sf = res[res.scoring == "selection-free"]
+check("selection-free: arms are restart and backtrack", set(sf.action) == {"restart", "backtrack"})
+t2048 = O.table(samples, load_traces(tp), "p2048", log=lambda *_: None)
+want = 0.5 * np.mean([(t2048[f"rt{e}"] - t2048[f"rp{e}"]).mean() for e in (0, 1)])
+rnd = sf[(sf.checkpoint == "2048") & (sf.action == "restart") & (sf.score == "random") & (sf.q == 0.5)].iloc[0]
+check("selection-free random restart = q x mean(r_t0 - r_prefix)", np.isclose(rnd.d_acc, want), (rnd.d_acc, want))
+want_tok = 0.5 * np.mean([(t2048[f"Lt{e}"] - t2048[f"Lp{e}"]).mean() for e in (0, 1)])
+check("selection-free tokens: cut (discarded) + replacement - (cut + held-out continuation)",
+      np.isclose(rnd.d_tokens_per_trace, want_tok), (rnd.d_tokens_per_trace, want_tok))
+flipped = load_traces(tp)
+flipped["y"] = 1 - flipped["y"]
+res_f = O.run(samples, flipped, log=lambda *_: None, n_boot=500)
+key = ["checkpoint", "action", "score", "q"]
+a = sf[~sf.score.str.startswith("label")].set_index(key).over_random
+b = res_f[(res_f.scoring == "selection-free") & ~res_f.score.str.startswith("label")].set_index(key).over_random
+check("selection-free results do not depend on the source outcomes", np.allclose(a, b.loc[a.index]))
+check("backtrack only where a previous checkpoint exists", set(res[res.action == "backtrack"].checkpoint) == {"2048", "4096"})
+check("backtrack table reads the previous prefix", "rb0" in t2048 and
+      np.isclose(t2048.rb0.iloc[0], samples[(samples.prefix_id == f"ceil/{t2048.trace_id.iloc[0]}/p512")
+                                            & (samples.half == 0)].correct.mean()))
+logs = []
+gone = samples[samples.prefix_id != "ceil/5_0/p512"]
+t_gone = O.table(gone, load_traces(tp), "p2048", log=logs.append)
+check("a trace without its previous prefix leaves every arm at that cut, logged",
+      "5_0" not in set(t_gone.trace_id) and len(t_gone) == len(t2048) - 1 and any("5_0" in l for l in logs))
 check("curve csv written", len(pd.read_csv(os.path.join(out, "oracle_curve.csv"))) == len(res))
 
 # 4. a problem without t0 cannot be scored for restart
@@ -105,6 +137,25 @@ try:
     check("missing t0 refused", False)
 except SystemExit:
     check("missing t0 refused", True)
+
+# 4b. source budget, offline: cut + n_gen >= 32768 is truncated and wrong, its length capped
+bp = os.path.join(d, "budget.jsonl")
+open(bp, "w").write(json.dumps({"prefix_id": "ceil/0_0/p4096", "round": 0, "problem_id": 0, "trace_id": "0_0",
+                                "checkpoint": "p4096", "samples": [
+                                    {"sample_idx": 0, "correct": True, "n_gen": 28671, "truncated": False},
+                                    {"sample_idx": 1, "correct": True, "n_gen": 28672, "truncated": False},
+                                    {"sample_idx": 2, "correct": False, "n_gen": 32768, "truncated": True}]}) + "\n")
+bs, _ = O.load_samples(bp)
+check("budget: 4096 + 28671 finished stays correct", bool(bs.correct[0]) and not bs.truncated[0])
+check("budget: 4096 + 28672 = 32768 is truncated and wrong", bool(bs.truncated[1]) and not bs.correct[1])
+check("budget: lengths capped at 32768 - cut", (bs.n_gen <= 32768 - 4096).all() and bs.n_gen[2] == 28672)
+check("budget: relabelled count recorded", bs.attrs["over_budget"] == (1, 1))
+
+# 4c. cohorts: main = problems whose traces sit at traces_B lines >= 480, pilot = the rest
+tr = pd.DataFrame({"problem_id": [7] * 480 + [8] * 6, "trace_id": [f"x{i}" for i in range(486)]})
+sm = pd.DataFrame({"problem_id": [7, 8, 8]})
+check("cohort main drops pilot problems", list(O.cohort(sm, tr, "main").problem_id) == [8, 8])
+check("cohort pilot keeps them", list(O.cohort(sm, tr, "pilot").problem_id) == [7])
 
 # 5. length match: the keep rule on hand-built continuations
 S = pd.DataFrame([
@@ -163,7 +214,8 @@ def selected(seed, K=16, long_wrong=0.9, long_right=0.2):
 
 
 smp, trc = selected(2)
-ctl = lambda df: (lambda r: r[(r.action == "resample") & (r.score == "oracle r_hat (low prefix r first)") & (r.q == 0.5)]
+ctl = lambda df: (lambda r: r[(r.action == "resample") & (r.score == "oracle r_hat (low prefix r first)") & (r.q == 0.5)
+                             & (r.scoring == "outcome")]
                   .iloc[0])(O.run(df, trc, log=lambda *_: None, n_boot=500))
 raw, matched = ctl(smp), ctl(O.length_match(smp, {}, log=lambda *_: None))
 check("selected sources: raw resample control is negative", raw.over_ci_high < 0,
