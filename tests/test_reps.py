@@ -136,7 +136,12 @@ check("4096 drops the trace without rollouts", get(4096, "r_hat").n_pairs == get
 check("drop is logged", any("without rollouts" in s for s in logs))
 check("Holm column on probe rows only", res[res.score == "r_hat"]["holm_vs_0.5"].isna().all()
       and res[res.score.str.contains(" lr/")]["holm_vs_0.5"].notna().all())
-check("summary written and flagged exploratory", "Exploratory" in open(os.path.join(d, "out", "reps_summary.md")).read())
+summary = open(os.path.join(d, "out", "reps_summary.md")).read()
+check("summary written and flagged exploratory", "Exploratory" in summary)
+# 4 views x 2 arms x 3 cuts; a probe_cmp reference row (which has no Holm p) must not join the count
+res2 = pd.concat([res, res[res.score == "last lr/raw"].assign(score="last lr/raw L20 (probe_cmp extraction)",
+                                                               **{"holm_vs_0.5": np.nan})], ignore_index=True)
+check("Holm count over the 24 probe cells only", "of 24" in RP.report(res2, 20))
 
 print(f"\n{len(fails)} failure(s)" + (f": {fails}" if fails else ""))
 sys.exit(1 if fails else 0)

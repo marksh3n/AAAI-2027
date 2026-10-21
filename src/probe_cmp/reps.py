@@ -143,7 +143,7 @@ def report(res, layer):
         to_r = "–" if r["score"] == "r_hat" else f"{-r['minus r_hat']:+.3f}"
         lines.append(f"| {r['checkpoint']} | {r['score']} | {f(r)} | {holm} | "
                      f"{d(r, ref) if ref else '–'} | {to_r} |")
-    probes = res[res.score.str.contains(" lr/")]
+    probes = res[res.score.str.endswith(tuple(f" lr/{a}" for a in ARMS))]  # not the probe_cmp reference row
     best = probes.loc[probes.auroc.idxmax()]
     sig = probes[probes["holm_vs_0.5"] < 0.05]
     lines += ["", "## In plain words\n",
