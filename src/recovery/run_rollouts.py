@@ -61,6 +61,9 @@ def add_args(parser):
     parser.add_argument("--status", action="store_true", help="print progress and spend, no GPU")
     parser.add_argument("--ledger-key", default=None,
                         help="spend is summed over runs with this key (a Modal retry reuses it)")
+    parser.add_argument("--save-token-ids", default="none", choices=["none", "sha", "full"],
+                        help="per sample: nothing (ceiling run), sha256 of the generated ids, or the ids")
+    parser.add_argument("--revision", default=None, help="model and tokenizer revision to pin (confirmation)")
     return parser
 
 
@@ -140,8 +143,35 @@ def score(prefix_text, gold, text, n_gen, finish_reason):
     }
 
 
+def token_record(ids, i, mode):
+    # the generated ids of sample i (confirmation sources), or their sha256 (rollout banks)
+    if mode == "none" or ids is None:
+        return {}
+    got = [int(x) for x in ids[i]]
+    if mode == "full":
+        return {"token_ids": got}
+    return {"token_ids_sha256": sha_obj(got)}
+
+
 def check_prompts(llm, make_params, recs):
-    # proves prompt_token_ids are what vLLM feeds for the rendered string, BOS included
+    # proves prompt_token_ids are what vLLM feeds for the rendered string, BOS included. records with
+    # bos == "one" (confirmation) are fed as ids, never as a string: there the check is that the
+    # ids carry exactly one leading BOS and that vLLM echoes them unchanged
+    one = [r for r in recs if r.get("bos") == "one"]
+    if one:
+        bos = llm.get_tokenizer().bos_token_id
+        firsts = {}
+        for r in one:
+            firsts.setdefault(tuple(r["prompt_token_ids"]), r)
+        outs = llm.generate([{"prompt_token_ids": list(k)} for k in firsts],
+                            make_params(n=1, temperature=0.0, max_tokens=1, seed=0))
+        for (ids, r), o in zip(firsts.items(), outs):
+            if list(o.prompt_token_ids) != list(ids) or ids[0] != bos or ids[1] == bos:
+                raise StaleCache(f"{r['prefix_id']}: prompt ids are not one-BOS ids echoed unchanged by vLLM")
+        print(f"prompt check: {len(firsts)} one-BOS prompts echoed unchanged", flush=True)
+        recs = [r for r in recs if r.get("bos") != "one"]
+        if not recs:
+            return
     first = {}
     for r in recs:
         first.setdefault(r["prompt_text"], r)
@@ -219,8 +249,9 @@ def units_of(work):
 class Live:
     # one prefix on the engine: its n samples stream in as token deltas, each tagged with
     # its child index, and each frees its slot the moment it finishes
-    def __init__(self, rec, params, est):
+    def __init__(self, rec, params, est, keep_ids=False):
         self.rec, self.params, self.est = rec, params, est
+        self.ids = defaultdict(list) if keep_ids else None
         self.text = defaultdict(list)
         self.tokens = Counter()
         self.finish = {}
@@ -229,6 +260,8 @@ class Live:
         # returns 1 when this delta finishes a sample
         self.text[c.index].append(c.text)
         self.tokens[c.index] += len(c.token_ids)
+        if self.ids is not None:
+            self.ids[c.index].extend(c.token_ids)
         if c.finish_reason is not None and c.index not in self.finish:
             self.finish[c.index] = c.finish_reason
             return 1
@@ -292,7 +325,7 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
                 rid = f"{rec['prefix_id']}#{args.round}"
                 engine.add_request(rid, {"prompt_token_ids": rec["prompt_token_ids"]
                                          + rec["prefix_gen_token_ids"]}, p)
-                live[rid] = Live(rec, p, est_tokens(rec, n))
+                live[rid] = Live(rec, p, est_tokens(rec, n), getattr(args, "save_token_ids", "none") != "none")
                 live_seqs += n
             if not live:
                 break
@@ -314,7 +347,8 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
                 # vLLM gives child i of a seeded n>1 request seed + i
                 samples = [{"sample_idx": i, "seed": p.seed + i,
                             **score(prefix_text, rec["gold_answer"], "".join(slot.text[i]),
-                                    slot.tokens[i], slot.finish.get(i))}
+                                    slot.tokens[i], slot.finish.get(i)),
+                            **token_record(slot.ids, i, getattr(args, "save_token_ids", "none"))}
                            for i in range(p.n)]
                 row = {
                     "prefix_id": pid,
@@ -440,6 +474,13 @@ def main():
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     cfg = {"model": MODEL, "temp": args.temp, "top_p": args.top_p,
            "max_tokens_cap": args.max_tokens_cap, "row_format": ROW_FORMAT}
+    # only when set, so the ceiling run's config hash is unchanged
+    if args.save_token_ids != "none":
+        cfg["save_token_ids"] = args.save_token_ids
+    if args.revision:
+        # confirmation: sources and banks must match on all of this, so the engine goes in too
+        cfg["revision"] = args.revision
+        cfg["vllm"] = vllm.__version__
     cfg_hash = check_config(f"{args.out}.config.json", cfg)
     torn = repair_tail(args.out)
     if torn:
@@ -460,7 +501,8 @@ def main():
     max_len = max(len(r["prompt_token_ids"]) + len(r["prefix_gen_token_ids"])
                   + (min(r["max_tokens"], args.max_tokens_cap) if args.max_tokens_cap else r["max_tokens"])
                   for r, _ in work)
-    llm = LLM(model=MODEL, dtype="float16", max_model_len=max_len, seed=args.seed,
+    pin = {"revision": args.revision, "tokenizer_revision": args.revision} if args.revision else {}
+    llm = LLM(model=MODEL, dtype="float16", max_model_len=max_len, seed=args.seed, **pin,
               enable_prefix_caching=True, enable_chunked_prefill=True,
               gpu_memory_utilization=args.gpu_mem, max_num_seqs=args.max_num_seqs,
               disable_log_stats=False)

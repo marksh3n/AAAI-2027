@@ -2,6 +2,10 @@
 
 The r(t) ceiling run on Modal: see [RUN_MODAL.md](RUN_MODAL.md).
 
+Confirmation design (monitors, policies, cost accounting, analysis plan):
+[docs/CONFIRMATION_SPEC.md](docs/CONFIRMATION_SPEC.md); its GPU run:
+[docs/RUN_CONFIRM_GPU.md](docs/RUN_CONFIRM_GPU.md); its dev runs: [docs/CONFIRM_DEV_COLAB.md](docs/CONFIRM_DEV_COLAB.md).
+
 ## Activation cache
 
 Activation parts are keyed by line number in `traces.jsonl`, so a part file existing is
@@ -50,6 +54,8 @@ python tests/test_ceiling.py     # r(t) ceiling vs probes: pooling, alignment, A
 python tests/test_probe_cmp.py   # probe comparison across checkpoints, synthetic data
 python tests/test_oracle.py      # oracle-r_hat intervention bound: halves, ties, cross-fit, resample control
 python tests/test_reps.py        # representation test: window / last-token arithmetic, planted signal
+python tests/test_confirm.py     # confirmation design: monitors == probe_cmp fits, vote, costs, token matching
+python tests/test_confirm_pipeline.py  # fit_monitors -> dev_bundle -> analyze end to end on synthetic files
 ```
 
 `--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a

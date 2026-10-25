@@ -1,7 +1,12 @@
-# oracle-r_hat intervention upper bound, from the existing ceiling rollouts. CPU only, no model.
+# rollout-ranked intervention, an OFFLINE estimate from the existing ceiling rollouts. CPU only, no model.
 # a monitor reads each trace at a cut and flags a share q of them; a flagged trace is abandoned and
-# replaced. the question is how much accuracy that can buy, and at what token cost, when the monitor
-# ranks by the rollout recoverability r_hat itself: the most any prefix-only monitor could do.
+# replaced. the question is how much accuracy that could buy, and at what token change, when the
+# ranking is the rollout-estimated recoverability r_hat (K=4 per half). this is a diagnostic of the gap
+# between sampled continuations and the tested monitors, not a policy run at equal compute: the ranking
+# uses graded continuations whose tokens are not in the plotted cost (reported separately as
+# selection_tokens_per_trace), equal shares flagged are not equal tokens, and r_hat from 4 samples is
+# noisy, so no row is a bound on what a monitor could do. the confirmation design (src/confirm) charges
+# every token and matches arms on total tokens.
 #   restart:   a fresh sample from the prompt; succeeds with r(t0) of its problem
 #   backtrack: a fresh continuation from the trace's previous checkpoint (2048 -> 512, 4096 -> 2048);
 #              succeeds with r(previous prefix). at 512 the previous point is t0, i.e. restart
@@ -297,6 +302,9 @@ def run(samples, traces, preds_dir=None, out=None, log=print, n_boot=N_BOOT, not
                         olo, ohi = S.ci(s["boot_over"])
                         kind = ("random" if fn is None else "oracle" if name.startswith("oracle")
                                 else "label" if name.startswith("label") else "probe")
+                        tlo, thi = S.ci(s["boot_tok"])
+                        # rollout-ranked rows read the ranking half's 4 continuations of every trace
+                        sel = 4 * t[["Lp0", "Lp1"]].values.mean() if kind == "oracle" else 0.0
                         rows.append({"cohort": label, "checkpoint": CKPTS[ckpt], "scoring": scoring,
                                      "action": action, "score": name, "kind": kind, "q": q, "flagged": flag.mean(),
                                      "source_acc": src_acc, "r_prefix": t[["rp0", "rp1"]].values.mean(),
@@ -304,7 +312,8 @@ def run(samples, traces, preds_dir=None, out=None, log=print, n_boot=N_BOOT, not
                                      "over_random": s["over_random"], "over_ci_low": olo, "over_ci_high": ohi,
                                      "over_p": S.boot_p(s["boot_over"]) if fn is not None else np.nan,
                                      "over_p_wald": wald_p(s["over_random"], s["boot_over"]) if fn is not None else np.nan,
-                                     "d_tokens_per_trace": s["d_tokens"],
+                                     "d_tokens_per_trace": s["d_tokens"], "d_tokens_ci_low": tlo,
+                                     "d_tokens_ci_high": thi, "selection_tokens_per_trace": sel,
                                      "src_tokens_per_trace": t.src_tokens.mean(),
                                      "traces": len(t), "problems": t.problem_id.nunique()})
     res = pd.DataFrame(rows)
@@ -351,7 +360,7 @@ def report(res, note=None, label="all problems", auc=None):
     cell = lambda r: f"{pp(r.over_random)} [{pp(r.over_ci_low)}, {pp(r.over_ci_high)}]"
     sizes = res.drop_duplicates("checkpoint")
     tag = f"{COHORT}; {label}"
-    lines = [f"# Oracle-r_hat intervention upper bound ({label})\n",
+    lines = [f"# Rollout-ranked intervention, offline estimate ({label})\n",
              f"> **{tag[0].upper() + tag[1:]}.** "
              + ", ".join(f"{r.checkpoint}: {r.traces} traces / {r.problems} problems" for r in sizes.itertuples())
              + ". Nothing here generalizes past this cohort.\n"]
@@ -369,9 +378,12 @@ def report(res, note=None, label="all problems", auc=None):
               "rollout sampler, not the source traces; compare the main-block run (same BOS) with all problems.",
               "- Cross-fitted: one half of each prefix's samples ranks, the other half scores replacement and baseline, "
               "then swap. **Value over random** = accuracy change minus that of flagging a random q with the same arm.",
-              "- *oracle r_hat* ranks by the prefix's own rollout success; *oracle advantage* by r(replacement) - "
-              "r(prefix); both are the most a prefix-only monitor could know. *label oracle* ranks by how the source "
-              "actually ended.",
+              "- *oracle r_hat* ranks by the prefix's own rollout-estimated success; *oracle advantage* by r(replacement) - "
+              "r(prefix). Both read graded continuations a prefix monitor does not have, and those continuations are "
+              "not in the token column (see *selection tokens*). They are noisy rollout estimates (K=4 per half), not "
+              "bounds on what a monitor could do. *label oracle* ranks by how the source actually ended.",
+              "- This is an offline estimate, not evidence that an intervention helps at equal compute: equal shares "
+              "flagged are not equal tokens, and the selector's cost is excluded.",
               "- Accuracy in pp of the cohort. Tokens = extra tokens per trace: an arm spends the cut (discarded) plus "
               "its replacement, minus the baseline (cut + held-out continuation length; the source's own length under "
               "outcome scoring). Continuations reaching 32768 tokens in all count as truncated. CIs: problem bootstrap.\n"]
@@ -389,14 +401,16 @@ def report(res, note=None, label="all problems", auc=None):
             if not len(g):
                 continue
             lines.append(f"## {action}, {scoring} scoring: value over random flagging, pp [95% CI] ({tag})\n")
-            lines.append("Oracle and label rows; *best q* is the maximum over q, an upper bound (q picked on the same data).\n")
-            lines.append("| checkpoint | score | " + " | ".join(f"q={q}" for q in PROBE_Q) + " | best q, upper bound: pp (tokens/trace) |")
+            lines.append("Oracle and label rows; *best q* is the maximum over q, optimistic because q is picked on the same "
+                         "data. Tokens: change per trace [95% CI], excluding the selection tokens.\n")
+            lines.append("| checkpoint | score | " + " | ".join(f"q={q}" for q in PROBE_Q) + " | best q (optimistic): pp (tokens/trace [95% CI]) |")
             lines.append("|---|---|" + "---|" * len(PROBE_Q) + "---|")
             for (c, name), h in g[g.kind.isin(["oracle", "label"])].groupby(["checkpoint", "score"], sort=False):
                 h = h.set_index("q")
                 best = h.over_random.idxmax()
                 lines.append(f"| {c} | {name} | " + " | ".join(cell(h.loc[q]) for q in PROBE_Q) +
-                             f" | {pp(h.at[best, 'over_random'])} at q={best} ({h.at[best, 'd_tokens_per_trace']:+,.0f}) |")
+                             f" | {pp(h.at[best, 'over_random'])} at q={best} ({h.at[best, 'd_tokens_per_trace']:+,.0f} "
+                             f"[{h.at[best, 'd_tokens_ci_low']:+,.0f}, {h.at[best, 'd_tokens_ci_high']:+,.0f}]) |")
             holm = scoring == "selection-free"
             lines.append("\nProbes, length and tf-idf at the pre-fixed q, every cell"
                          + ("; after each cell, the Holm-adjusted p over this arm's probes x cuts x q (Wald p from the "
@@ -424,9 +438,12 @@ def report(res, note=None, label="all problems", auc=None):
                         ("backtrack", "oracle advantage (r_prev - r_prefix)")):
         for c, h in sf[(sf.action == action) & (sf.score == adv)].groupby("checkpoint", sort=False):
             b = h.loc[h.over_random.idxmax()]
-            lines.append(f"- {action} at {c}: a perfect prefix-only monitor gains at most {pp(b.over_random)} pp over "
-                         f"random flagging [{pp(b.over_ci_low)}, {pp(b.over_ci_high)}] (q={b.q}, "
-                         f"{b.d_tokens_per_trace:+,.0f} tokens per trace; {pp(b.d_acc)} pp over keeping every trace).")
+            lines.append(f"- {action} at {c}: ranking by rollout-estimated advantage gains {pp(b.over_random)} pp over "
+                         f"random flagging [{pp(b.over_ci_low)}, {pp(b.over_ci_high)}] at the best q={b.q} (optimistic: q "
+                         f"picked here). Token change {b.d_tokens_per_trace:+,.0f} per trace [{b.d_tokens_ci_low:+,.0f}, "
+                         f"{b.d_tokens_ci_high:+,.0f}], before the ~{b.selection_tokens_per_trace:,.0f} selection tokens per "
+                         f"trace the ranking needs; {pp(b.d_acc)} pp over keeping every trace. Offline estimate, not "
+                         f"equal-compute evidence.")
     ctl = res[(res.scoring == "outcome") & (res.action == "resample") & (res.score == "oracle r_hat (low prefix r first)")
               & (res.q == 0.5)]
     if len(ctl):
@@ -435,8 +452,9 @@ def report(res, note=None, label="all problems", auc=None):
                                             f"{pp(r.over_ci_high)}]" for r in ctl.itertuples())
                      + ". Source accuracy vs mean prefix r_hat: " + "; ".join(
                          f"{r.checkpoint}: {r.source_acc:.3f} vs {r.r_prefix:.3f}" for r in ctl.itertuples()) + ".")
-    lines.append("- These are upper bounds: the q with the best value is picked on the same data. K=4 per half makes "
-                 "r_hat noisy, which pulls the oracle rows down.")
+    lines.append("- Best-q rows are optimistic, since q is picked on the same data. K=4 per half makes r_hat noisy; that "
+                 "noise moves the oracle rows in an unknown direction once selection is accounted for, so they are not "
+                 "a ceiling. The tested probes have not shown useful intervention value on these development cohorts.")
     return "\n".join(lines) + "\n"
 
 
@@ -516,8 +534,9 @@ def headline(res, out, label):
     axes[0][0].set_ylabel("accuracy gain over random flagging (pp)")
     handles, labels = axes[0][-1].get_legend_handles_labels()
     fig.legend(handles, labels, frameon=False, fontsize=7, loc="lower center", ncol=5, bbox_to_anchor=(0.5, -0.06))
-    fig.suptitle(f"Selection-free gain over random flagging, 95% CIs; {COHORT}; {label}. "
-                 f"Under the rollout sampler (source-vs-rollout gap unexplained).", fontsize=8)
+    fig.suptitle(f"Offline, rollout-estimated gain over random flagging at equal share flagged (not equal tokens), 95% CIs; "
+                 f"oracle rows exclude their selection rollouts; {COHORT}; {label}. Under the rollout sampler "
+                 f"(source-vs-rollout gap unexplained).", fontsize=8)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "headline.png"), bbox_inches="tight")
     plt.close(fig)
