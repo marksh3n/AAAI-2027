@@ -11,8 +11,11 @@ bug to fix before any confirmation data exists.
 | `monitors/manifest.json` sha256 (refit 2026-10-27; `.joblib` bytes identical to the 2026-10-25 fit, manifest `abcd7a2f…37f1`) | `344b7fa22399076799a71bc8b83cfef81d80eb01d4568091d95de065f35c5b83` |
 | `spec.slots_sha()`, team slots (status `pending_team_choice`) | `f1d63e60e7c9f366e32c9a9f6e01343b50acbdaf3b983ca901409ce578815a45` |
 
-**Pre-registration.** Before any confirmation GPU step: push this file, `src/confirm/` and the monitors
-manifest, or send the mentor the commit hash and the hashes above. Nothing here changes once
+**Status: draft.** Freezes once the team slots and the open decisions in §11 are settled; the primary
+test and the margin rule may still change, which changes `spec_sha()`.
+
+**Pre-registration.** After the freeze and before any confirmation GPU step: push this file, `src/confirm/`
+and the monitors manifest, or send the mentor the commit hash and the hashes above. Nothing here changes once
 confirmation outcomes exist; any change goes in the decision log (§10) with date and reason.
 
 ## 1. Questions
