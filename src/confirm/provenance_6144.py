@@ -35,7 +35,8 @@ def remix(store, ids):
 
 def pre_answer(store, ckpt, ids):
     texts = store.text(ckpt, list(ids))
-    return {i for i, t in zip(ids, texts) if B.cut_flags(t, store.traces.at[i, "answer"], True)[1]}
+    # the strict rule (value anywhere), as in the first provenance run
+    return {i for i, t in zip(ids, texts) if B.cut_rules(t, store.traces.at[i, "answer"], True)["pre_answer_strict"]}
 
 
 def no_think(store, ckpt, ids):

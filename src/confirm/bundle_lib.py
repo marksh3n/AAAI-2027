@@ -1,7 +1,7 @@
 # shared by bundle.py (confirmation GPU outputs) and dev_bundle.py (development data): answer
 # clustering for the vote, live / pre-answer flags per cut, rollout-bank summaries, applying the frozen
 # monitors, and writing the bundle analyze.py reads.
-import json, os, sys
+import json, os, re, sys
 import joblib
 import numpy as np
 import pandas as pd
@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "probe_cmp"))
 import spec  # noqa: E402
-from ceiling import answer_flags, same  # noqa: E402
+from ceiling import answer_flags, norm, same  # noqa: E402
 
 
 def cluster_keys(answers, correct):
@@ -31,12 +31,35 @@ def cluster_keys(answers, correct):
     return out
 
 
-def cut_flags(prefix_text, final_answer, still_generating):
-    # live: generating after the cut and thinking not closed. pre_answer: live, and the cut holds no
-    # </think>, no \boxed and not the trace's own final answer value (ceiling.answer_flags)
+def stated(prefix_text, final_answer):
+    # the trace's final answer value written right after an answer cue, on the same line: "the answer
+    # is 6", "Final answer: 3/4". value matching as ceiling.answer_flags (normalized, standalone)
+    if final_answer is None or (isinstance(final_answer, float) and np.isnan(final_answer)) or not norm(final_answer):
+        return False
+    text = re.sub(r"\\(left|right)", "", prefix_text).replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
+    cue = "|".join(re.escape(c) for c in spec.ANSWER_CUES)
+    a = re.escape(norm(final_answer))
+    return bool(re.search(rf"(?i:{cue})[^\n]{{0,{spec.ANSWER_CUE_WINDOW}}}?(?<![\w.]){a}(?!\w|\.\d)", text))
+
+
+def cut_rules(prefix_text, final_answer, still_generating):
+    # live: generating after the cut and thinking not closed. the three pre-answer rules, each within live:
+    #   pre_answer (primary, "stated"): no \boxed and no stated answer
+    #   pre_answer_strict: no \boxed and the final answer value nowhere (ceiling.answer_flags)
+    #   pre_answer_think_boxed: no \boxed
     live = bool(still_generating) and spec.THINK_END not in prefix_text
+    boxed = "\\boxed" in prefix_text
     _, leaked = answer_flags(prefix_text, final_answer)
-    return live, live and not leaked
+    return {"live": live, "pre_answer": live and not boxed and not stated(prefix_text, final_answer),
+            "pre_answer_strict": live and not leaked, "pre_answer_think_boxed": live and not boxed}
+
+
+def cut_flags(prefix_text, final_answer, still_generating):
+    r = cut_rules(prefix_text, final_answer, still_generating)
+    return r["live"], r["pre_answer"]
+
+
+PRE_COLS = ("pre_answer", "pre_answer_strict", "pre_answer_think_boxed")
 
 
 def bank_table(samples):
@@ -56,8 +79,9 @@ def bank_table(samples):
 def load_monitors(mon_dir):
     # every frozen monitor, each checked against the manifest's sha256 before it is used
     man = json.load(open(os.path.join(mon_dir, "manifest.json")))
-    if man["spec_sha256"] != spec.spec_sha():
-        raise SystemExit(f"monitors were fit under spec {man['spec_sha256'][:16]}, this is {spec.spec_sha()[:16]}")
+    got = man.get("monitor_spec_sha256")
+    if got != spec.monitor_sha():
+        raise SystemExit(f"monitors were fit under monitor spec {str(got)[:16]}, this is {spec.monitor_sha()[:16]}; refit")
     out = {}
     for key, info in man["monitors"].items():
         path = os.path.join(mon_dir, info["file"])

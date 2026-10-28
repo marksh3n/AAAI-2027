@@ -74,6 +74,7 @@ steps = [
     [py, "src/confirm/fit_monitors.py", "--data", d, "--registry", regp, "--out", mon],
     [py, "src/confirm/dev_bundle.py", "--data", d, "--registry", regp, "--rollouts", rollp, "--monitors", mon, "--out", bun],
     [py, "src/confirm/analyze.py", "--bundle", bun, "--out", out, "--n-boot", "200"],
+    [py, "src/confirm/count_pre_answer.py", "--data", d, "--registry", regp, "--rollouts", rollp],
     [py, "src/confirm/provenance_6144.py", "--data", d, "--registry", regp, "--out", os.path.join(d, "prov")],
 ]
 for cmd in steps:
@@ -93,11 +94,18 @@ else:
     src = pd.read_parquet(os.path.join(bun, "sources.parquet"))
     check("dev bundle: every trace of the rolled-out problems, truncated ones included",
           len(src) == 240 and src[src.trace_id == "0_0"].correct.iloc[0] == 0)
+    man_ok = man.get("monitor_spec_sha256") is not None
+    check("manifest carries the monitor-only spec hash", man_ok)
+    pops = pd.read_csv(os.path.join(out, "populations.csv"))
+    check("populations count live cuts and mixed problems under all three pre-answer rules",
+          {f"{p}_{k}" for p in ("live", "mixed") for k in ("pre_answer", "pre_answer_strict", "pre_answer_think_boxed")}
+          <= set(pops.columns), list(pops.columns))
     pol = pd.read_csv(os.path.join(out, "policies.csv"))
     check("policies at 2048 and 4096 only", set(pol.checkpoint) == {2048, 4096}, set(pol.checkpoint))
     auc = pd.read_csv(os.path.join(out, "auroc.csv"))
     check("AUROC at 6144 for the tree on live pre-answer traces",
           ((auc.checkpoint == 6144) & (auc.score == "hgb_topk50_L20") & (auc.population == "live, pre-answer")).any())
+    check("sensitivity AUROC populations reported", auc.population.str.contains("sensitivity").any())
     md = open(os.path.join(out, "report.md")).read()
     check("report is labelled a development dry run", "DEVELOPMENT DRY RUN" in md)
     prov = pd.read_csv(os.path.join(d, "prov", "auroc_by_seed.csv"))

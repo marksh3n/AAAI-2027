@@ -8,9 +8,13 @@ The constants are in `src/confirm/spec.py`. This document says the same in words
 disagree, `spec.py` is what runs, and the disagreement is a bug to report before any confirmation
 data exists.
 
-- Spec hash (`spec.spec_sha()`, my part): `84319a9c1b7bd027f33e9eb74f57119005dd15389be23975a182ff407b644b2d`
-- Monitors manifest sha256 (`monitors/manifest.json`, written by `fit_monitors.py` on Colab):
-  **pending: fill in after the dev fit, before any confirmation data**
+- Spec hash (`spec.spec_sha()`, my part): `f1e4f6ef4c510e738e04b8fd9937a8de17f1305351a51e04d8d8320d19d75df2`
+- Monitor-spec hash (`spec.monitor_sha()`, only what the monitor fit depends on; monitors are checked
+  against this): `22612aaffbf5fc8d26fda3a450363e2d9127062f1b40530d94a4db8b1d2a92a5`
+- Monitors manifest sha256 (`monitors/manifest.json`, in `MyDrive/e0_confirm/monitors`, refit
+  2026-10-27): `344b7fa22399076799a71bc8b83cfef81d80eb01d4568091d95de065f35c5b83`. The ten `.joblib`
+  files are byte-identical to the 2026-10-25 fit (kept in `monitors_20261025`, manifest
+  `abcd7a2f…37f1`); only the manifest changed, because it now records the monitor-spec hash.
 
 **Pre-registration.** A local commit date is set by the committer's machine and proves nothing.
 Before Mark starts any confirmation GPU step, push this file, `src/confirm/` and the monitors
@@ -80,8 +84,8 @@ predictions and the same C as probe_cmp for all four, so the frozen tree is the 
 
 ### Where the dev 6144 tree came from
 
-What follows comes from the repo, PRs and notebooks. Items marked (pending) await the Colab
-provenance run.
+What follows comes from the repo, the PRs, the notebooks and the `provenance_6144.py` run on
+Colab (2026-10-25).
 
 - **What it is.** Every "6144 top-neuron tree" number comes from probe_cmp's `hgb/topk50` at layer
   20. It is not a single tree: it is a 150-round gradient-boosted ensemble of depth-3 trees on 50
@@ -103,16 +107,33 @@ provenance run.
 
   342 / 74 and 227 / 59 are exactly the probe_cmp fixed populations of the exploratory Colab runs
   "checkpoints to 6144" (run config `84f323af6b632716`) and "checkpoints to 8192" (`58257a910722e256`),
-  with layers 20/16/12, 3 seeds, and all 10 arms. The match on counts is observed; that the exports
-  came from those runs is inferred. Fold seed and averaging are not recorded in the CSVs.
-- **No rule in the code gives 197 / 53.** (pending) `provenance_6144.py` tests 12 candidate rules,
-  among them pre-answer at 8192, main block only and length caps, and refits the tree per seed on
-  any that match.
+  with layers 20/16/12, 3 seeds, and all 10 arms. `provenance_6144.py` confirms it:
+  - the two CSVs hold exactly those trace sets;
+  - refitting gives the seed-averaged tree and len AUROCs to three decimals: .523 / .554 on
+    342/74, .573 / .568 on 227/59;
+  - tf-idf comes out within .003 (.548, .443).
+
+  So the exports are the seed-averaged out-of-fold predictions of those runs.
+- **No rule in the code gives 197 / 53.** `provenance_6144.py` tried 12 candidate rules:
+  - pre-answer or no-`</think>` at 6144 or 8192;
+  - main block only;
+  - length caps.
+
+  None gives 197/53; the closest is "reach 8192, no `</think>` at 8192" at 206/55.
+  - Per fold seed, the tree at 6144 reads .560 / .554 / .502 on 342/74 and .552 / .552 / .604 on
+    227/59, never the memo's .642 / .679 / .642.
+  - In this pipeline, `lr/len` is identical across fold seeds (.554 / .568). The memo's baseline
+    varies (.553 / .572 / .553), so the memo used a different baseline, and probably different
+    code (inferred).
+  - The memo's number cannot be reproduced from the repo. Ghait's cohort rule and code are needed
+    to say more.
 - **How many were tried.** The two exploratory runs fit 8 hidden-state arms × 3 layers × 8–9
   checkpoints × 3 seeds. The Oct 9 full-table run swept a logistic probe over 29 layers × 13
   checkpoints, and at 6144 it read .486 [.41, .56] (slides, p. 10). Ghait counts 324 seed-0
   comparisons against the observable and tf-idf baselines. The 6144 tree was picked as the best
   cell after looking.
+- **Frozen fit.** At 6144 on the 342/74 population, the tree's dev out-of-fold AUROC (seed 0) is .560
+  [.487, .631], against len .554 and lr/raw .523.
 - **Pre-registration decision.** The tree is a **secondary** monitor, tested only at 6144 (S4, S5,
   S7), never primary.
   - Its dev effect size is selected (winner's curse) and depends on the cohort: .52 on the 342 / 74
@@ -126,8 +147,17 @@ provenance run.
 - **Live at c**: the trace is still generating after c tokens (n_gen > c, so no EOS among the first
   c), and its first c tokens contain no `</think>`. Policies act only on live traces. Every other
   attempt keeps its own outcome and cost.
-- **Pre-answer at c**: live, the decoded prefix holds no `\boxed`, and the trace's own final answer
-  value is not yet written (`ceiling.answer_flags`).
+- **Pre-answer at c** (story 2, S7): primary rule "stated", `bundle_lib.cut_rules`. The cut is live,
+  the decoded prefix has no `\boxed`, and it does not state the trace's own final answer.
+  - "States" means the value follows a cue on the same line, within 40 characters. The cues are
+    `final answer`, `answer is`, `answer:`, matched case-insensitively.
+  - In regex form: `(?i:final answer|answer is|answer:)[^\n]{0,40}?(?<![\w.])VALUE(?!\w|\.\d)`.
+    VALUE is the normalized final answer (`ceiling.norm`). The prefix is normalized the same way:
+    `\left` / `\right` removed, `\dfrac` and `\tfrac` turned into `\frac`.
+  - Two sensitivity rules are pre-registered, reported beside the primary and not tested:
+    - **strict**: no `\boxed`, and the final answer value appears nowhere as a standalone number
+      (`ceiling.answer_flags`);
+    - **think_boxed**: no `\boxed` only (`</think>` is already excluded by live).
 - **Available population at c**: every live trace at c. **Matched cohort**: traces live at every
   checkpoint, used only for timing comparisons. Both are reported, along with counts per
   checkpoint.
@@ -202,7 +232,18 @@ intervention. A comparator whose spend is linear in its rate (random, aggregatio
   | S4 | 6144 | tree-triggered restart | random restart |
   | S5 | 6144 | tree-triggered backtrack | random backtrack |
   | S6 | 4096 | primary monitor's value over random | `len`'s value over random (is hidden-state value beyond observable length?) |
-  | S7 | 6144 | tree AUROC on **live pre-answer** cuts | `len` (story 2: the signal arrives before the answer) |
+  | S7 | 6144 | tree AUROC on **live pre-answer** cuts, primary "stated" rule; strict and think_boxed reported beside it | `len` (story 2: the signal arrives before the answer) |
+
+  - **S7 estimate-only branch** (`spec.S7_MIN_MIXED` = 500, pre-registered 2026-10-27). Count the
+    mixed problems among live "stated" pre-answer cuts at 6144 in the confirmation data. This is a
+    label count and reads no scores. If the count is below 500, S7 is reported as effect and 95% CI
+    only, makes no claim, and leaves the Holm family, which is then S1–S6. Otherwise S7 is tested as
+    above. The analysis applies this automatically and prints the count.
+  - Why 500: on dev, 61 mixed problems give a CI half-width of about ±0.13 (scaled from the strict
+    rule's ±0.19 at 30 problems; an estimate, not computed). 80% power for the dev-sized +0.065 needs
+    an SE near 0.023, about 9× the clusters.
+  - **[JADEN: `expected_mixed_6144_stated`]**: his projected count for this comparison, for
+    planning only. The branch is decided on the observed count.
 
 - **Descriptive, not tested**:
   - every AUROC (live, pre-answer, matched cohort) per checkpoint;
@@ -210,10 +251,20 @@ intervention. A comparator whose spend is linear in its rate (random, aggregatio
   - fixed arms, the rollout-ranked diagnostic, m = 4, and baseline-triggered policies.
 - **Population [JADEN]**: problem list file and its sha256 (`gpu_prep.py t0` refuses any other),
   number of problems, samples per problem. **Sample size [JADEN]**.
-- **Planning note for Jaden (dev, not a decision).** On dev, the closest earlier number to H1 is
-  restart at 4096 by `lr/raw L20` at q = 0.25: +1.2 pp [−0.2, +2.9] over random flagging. That
-  number is selection-free scoring at equal share flagged, not equal tokens. The dev dry run
-  (`docs/CONFIRM_DEV_COLAB.md`) gives the same contrast in this design's metric.
+- **Planning note for Jaden (dev, not a decision).** The dev dry run (2026-10-25) uses this
+  design's metric, out-of-fold scores, the 87 ceiling problems and 522 attempts. Live cuts without
+  a bank cannot be flagged.
+
+  | Primary contrast | Δ | 95% CI |
+  |---|---|---|
+  | vs token-matched random restart | +1.1 pp | [−0.6, +3.1] |
+  | vs token-matched maj@3 | +1.6 pp | [−0.1, +3.4] |
+
+  - The primary monitor flagged 16% of live traces, spending about +400 tokens per attempt over
+    no intervention (11,964).
+  - At this size the half-width is about 1.8 pp. Detecting about 1 pp needs a few times more
+    problems.
+  - Both contrasts carry the dev source-vs-rollout gap (§8).
 
 ## 8. Validity checks and the source-vs-rollout gap
 
@@ -221,6 +272,8 @@ intervention. A comparator whose spend is linear in its rate (random, aggregatio
   monitor's flags) with a fresh continuation of its own prefix. With one engine this must be ≈0.
 - On dev it was not: source accuracy 0.527 vs mean prefix r̂ 0.600 at 512 in the ceiling cohort,
   shrinking to 5.1 and 3.0 pp at 2048 and 4096.
+- The dev dry run's built-in check flags the same gap: +4.4 pp [+1.3, +7.6] at 2048 and +2.6
+  [−0.3, +5.5] at 4096, so the check catches what it is meant to.
 - If the check's CI at the decision checkpoint excludes 0:
   - the primary is reported with a flag;
   - the pre-specified sensitivity analysis (`analyze.py --keep rollout`) values kept live traces
@@ -252,13 +305,70 @@ source outcomes with rollouts: the oracle plots and dev r̂ calibration.
   not a ceiling on what a monitor could do.
 - The rollout-ranked plots are offline estimates. Their selector's rollouts are not in the plotted
   cost, and equal shares flagged are not equal tokens.
-- No "no extra token cost": token changes are reported with CIs. Ghait reads the dev backtrack
-  token interval as including an increase before selection overhead. The old summaries printed no
-  token CI; `oracle.py` now prints one.
+- No "no extra token cost": token changes are reported with CIs. The rerun with token CIs (oracle_v4,
+  all problems) has the following, before the ~35–47k selection tokens per trace the ranking needs:
+
+  | Arm | Token change per trace | 95% CI |
+  |---|---|---|
+  | backtrack at 2048 | −24 | [−233, +163] |
+  | restart at 512 | −38 | [−279, +199] |
 - No "audit but not correct". On development cohorts, the tested probes have not shown useful
   intervention value. That does not show hidden states lack the information.
 
-## 10. Files
+## 10. Decision log (changes to this spec after dev outcomes were seen)
+
+- **2026-10-25, pre-answer rule for S7.** The first draft used the strict value-anywhere rule, as the
+  task asked. The dev dry run then showed it drops many cuts for coincidental short numbers: 193 of 357
+  live cuts and 30 of 70 mixed problems remain at 6144. An earlier hand audit at 512 found that 0 of 20
+  removed cuts stated an answer.
+  - Siddhant chose the "stated" rule as primary, with strict and think_boxed as pre-registered
+    sensitivities.
+  - **Disclosure:** before this choice, these dev S7 quantities had been computed and seen. On
+    strict pre-answer cuts at 6144, tree − len AUROC was +0.096 [−0.092, +0.285]. On all live cuts
+    (only `</think>` excluded), tree AUROC was .593, +0.065 over len.
+  - No S7 quantity has been computed under the "stated" rule. `count_pre_answer.py` reports counts
+    only, from labels with no scores.
+  - No confirmation data existed at the time.
+  - Counts on dev (2026-10-27, cuts kept / mixed problems among them, run before the freeze):
+
+    | Rule | all dev 2048 | 4096 | 6144 | dry-run 87 2048 | 4096 | 6144 |
+    |---|---|---|---|---|---|---|
+    | live (`</think>` only) | 1456 / 99 | 853 / 86 | 611 / 73 | 512 / 87 | 442 / 82 | 357 / 70 |
+    | stated (primary) | 1376 / 98 | 797 / 82 | 565 / 63 | 505 / 87 | 419 / 78 | 333 / 61 |
+    | strict | 745 / 65 | 427 / 45 | 315 / 31 | 346 / 60 | 249 / 44 | 193 / 30 |
+    | think_boxed | 1450 / 99 | 848 / 85 | 605 / 72 | 511 / 87 | 440 / 81 | 353 / 69 |
+- **2026-10-25, monitor hash.** Monitors are now checked against `monitor_sha()`, not the full spec
+  hash, so analysis-only rules like the one above can change without a refit. Refit 2026-10-27:
+  same `.joblib` bytes, new manifest `344b7fa2…5b83`.
+- **2026-10-27, S7 estimate-only branch** (`S7_MIN_MIXED` = 500), added before any S7 number under
+  "stated" existed. The dev dry run under the frozen rule was then run: S7 = +0.090 [−0.029, +0.211]
+  with 61 mixed problems, so estimate-only. The primary contrasts did not change (+1.1 vs random,
+  +1.6 vs maj@3).
+- **2026-10-27, Jaden's slots** filled from his planning package, status `pending_team_choice`.
+  `analyze.py` gives no primary verdict and `gpu_prep.py t0` refuses to start until the status is
+  `frozen`. The open conflicts are in section 11.
+
+## 11. Conflicts with Jaden's protocol (open, 2026-10-27)
+
+His package: `Jaden_Accuracy_Planning_Handoff_q025.zip`, protocol status
+`awaiting_policy_and_freshness_check`. Dev numbers below are from the 2026-10-27 dry run
+(`discordance.py`, `power.py`; power code reproduces his 87.63% / 93.47% exactly).
+
+| # | Topic | His protocol | This spec | Recommendation |
+|---|---|---|---|---|
+| 1 | Primary comparator | aggregation only | random restart **and** maj@3, both token-matched (intersection-union) | Keep random restart as a primary comparator. At equal tokens, aggregation acts on only 1.6% of attempts at 4096 (1–5% across arms), so monitor vs aggregation is close to monitor vs nothing. Random restart is the contrast that isolates the monitor's targeting. |
+| 2 | Discordance q | assumed 0.25, effect +5 pp | dev at 4096: d = +1.6 pp vs maj@3. q = 0.062 if both arms continue the same source trace, 0.378 if each arm samples its own | Pair the arms on a shared source. At N = 1000: McNemar power 0.51 (shared) or 0.12 (independent); Tango rule-out of ≥5 pp 0.99 (shared) or 0.54 (independent). Diluted to an unfiltered population (87 of 367 dev problems can be acted on), d ≈ 0.4 pp and detection power is about 0.1 either way. The likely informative outcome is the rule-out. |
+| 3 | Samples per problem | one outcome per arm per problem | several sources per problem (dev: 6) | One sample per problem makes S7 and every within-problem AUROC impossible (`expected_mixed_6144_stated` = 0). Tokens per problem from the dev bundle: his shared design 13k; K = 6 with only the t0 bank 169k (restart, votes, S7, AUROC); K = 6 with full prefix banks 1.25M. Recommend K = 6 with the t0 bank on all 1000, about 169M tokens. Full banks only on a subset if the resample check is needed. |
+| 4 | Scope | probe-triggered intervention | same | Dev: probe AUROC at 4096 is .516 vs length .528; S6 (probe value beyond length) +0.6 pp [−2.0, +3.3]. Three framings: probe primary (current); length or timeout primary (len-triggered restart vs none +2.9 [+0.4, +5.5], vs random +0.5); probe beyond length (S6 as primary). Recommend making probe beyond length the confirmatory question with Jaden's rule-out framing. Keep probe vs random and vs maj@3 as secondaries. Needs a team call, because it changes `spec.PRIMARY`. |
+| 5 | Population | MATH levels 3–5, original train and test mixed, MATH-500 excluded | dev was 367 MATH test problems (no overlap with his pool) | 632 of his 1000 confirmation problems and 70 of the 100 pilot problems are original MATH train, which the model family may have seen in training. The pool holds 3,301 eligible test problems, enough for 100 + 1000. Recommend test only, taken in his saved order. Otherwise report the split as a stratum. |
+| 6 | Equal compute | equal allocated caps; weighted "charged token equivalents", weights not set | realized generated tokens, comparator rate matched to the policy's total in every bootstrap draw | Keep realized tokens as the primary match. Equal caps do not give equal spend, because restarts and votes stop early. Report his weighted totals as an audit. |
+| 7 | Meaning of the 5 pp margin | superiority vs 0 (McNemar), plus a Tango test ruling out a gain of ≥ 5 pp | verdict needs both lower 95% bounds above the margin | Adopt his two statements: superiority vs 0 across the primary comparators, plus a rule-out of ≥ 5 pp. Under this spec's current rule, a 5 pp margin cannot be met at any plausible effect. `analyze.py` needs this change before the freeze. |
+| 8 | Problem file | id CSVs (`mathsha256:` ids, no text) | `gpu_prep.py` needs a jsonl with problem and gold | His `data/input/` was not in the package. Build the jsonl from it and put its sha in `problems_file_sha256`. |
+
+S7 under his design is not evaluable. With K = 6 on 1000 problems, dev rates (63 of 367 problems mixed
+at 6144 under "stated") give about 170 mixed problems, under 500, so S7 is estimate-only either way.
+
+## 12. Files
 
 | Path | What |
 |---|---|
@@ -268,4 +378,5 @@ source outcomes with rollouts: the oracle plots and dev r̂ calibration.
 | `src/confirm/policy.py`, `analyze.py` | arms, cost, token matching, tests, report |
 | `src/confirm/gpu_prep.py`, `bundle.py`, `scripts/confirm_modal.py` | the confirmation data run (`docs/RUN_CONFIRM_GPU.md`) |
 | `src/confirm/dev_bundle.py` | dev data in the same schema, for the dry run |
+| `src/confirm/power.py`, `discordance.py` | power of Jaden's McNemar and Tango tests; dev-implied q and effect |
 | `tests/test_confirm.py`, `tests/test_confirm_pipeline.py` | synthetic checks, including equality with probe_cmp's fits |

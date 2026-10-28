@@ -62,6 +62,8 @@ def load_problems(path):
 def cmd_t0(a):
     sha = spec.file_sha(a.problems)
     want = spec.JADEN["problems_file_sha256"]
+    if spec.JADEN.get("status") != "frozen" and not a.smoke:
+        raise SystemExit(f"Jaden's slots are {spec.JADEN.get('status')}, not frozen")
     if want is None and not a.smoke:
         raise SystemExit("spec.JADEN['problems_file_sha256'] is empty: the confirmation population is not frozen yet")
     if want is not None and sha != want and not a.smoke:
@@ -118,9 +120,8 @@ def cut_table(src, tok, ckpts):
             if t.n <= c:
                 continue
             text = tok.decode(t.token_ids[:c])
-            live, pre = B.cut_flags(text, t.answer, True)
-            rows.append({"trace_id": t.trace_id, "problem_id": t.problem_id, "checkpoint": c, "live": live,
-                         "pre_answer": pre, "prefix_text": text,
+            rows.append({"trace_id": t.trace_id, "problem_id": t.problem_id, "checkpoint": c,
+                         **B.cut_rules(text, t.answer, True), "prefix_text": text,
                          "prefix_sha": hashlib.sha256(json.dumps(list(t.token_ids[:c])).encode()).hexdigest()})
     return pd.DataFrame(rows)
 

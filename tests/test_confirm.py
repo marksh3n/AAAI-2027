@@ -148,9 +148,26 @@ for sd in range(6):
 check("noise monitor vs token-matched random is unbiased (mean of 6 seeds within 1 pp)", abs(np.mean(deltas)) < 0.01,
       np.round(100 * np.array(deltas), 2))
 check("primary tests are filled", res["primary vs random"] is not None and res["primary vs aggregate2"] is not None)
-check("no verdict without Jaden's margin", res["primary verdict"].startswith("not evaluated"))
+check("no verdict while Jaden's slots are pending", res["primary verdict"].startswith("not evaluated"), res["primary verdict"])
 check("S7 pre-answer AUROC test computed", any(s["id"] == "S7" and s.get("delta") is not None for s in res["secondary"]))
-check("secondary family Holm-adjusted", all("p_holm" in s for s in res["secondary"] if s.get("delta") is not None))
+check("secondary family Holm-adjusted", all("p_holm" in s for s in res["secondary"]
+                                            if s.get("delta") is not None and not s.get("estimate_only")))
+s7 = next(s for s in res["secondary"] if s["id"] == "S7")
+check("S7 below S7_MIN_MIXED is estimate-only, no p, not in Holm",
+      s7.get("estimate_only") and "p" not in s7 and "p_holm" not in s7 and s7["mixed"] < spec.S7_MIN_MIXED, s7)
+report_md = open(os.path.join(tmp, "out", "report.md")).read()
+check("report says S7 is estimate only", "estimate only" in report_md and "not in the Holm family" in report_md)
+# the same S7 bootstrap with enough mixed problems enters Holm; the other six keep their p values
+k7 = (6144, "pre_answer")
+fake_boot = {k7: {"hgb_topk50_L20": np.linspace(.55, .65, 50), "len": np.full(50, .5)}}
+fake_est = {k7: {"hgb_topk50_L20": .6, "len": .5}}
+big = A.tests({}, fake_boot, fake_est, None, s7_mixed=spec.S7_MIN_MIXED)
+small = A.tests({}, fake_boot, fake_est, None, s7_mixed=spec.S7_MIN_MIXED - 1)
+b7, s7s = (next(s for s in r["secondary"] if s["id"] == "S7") for r in (big, small))
+check("S7 at S7_MIN_MIXED is tested and Holm-adjusted", "p_holm" in b7 and not b7.get("estimate_only"), b7)
+check("S7 one below S7_MIN_MIXED is estimate-only", s7s.get("estimate_only") and "p_holm" not in s7s, s7s)
+check("S7 with no count is estimate-only", next(s for s in A.tests({}, fake_boot, fake_est, None)["secondary"]
+                                                if s["id"] == "S7").get("estimate_only"))
 check("AUROC of the planted monitor is high", auc[(auc.score == "lr_raw_L20") & (auc.population == "live")].auroc.min() > 0.8)
 fixed = pol[(pol.checkpoint == 4096) & pol.arm.str.startswith("fixed restart")].iloc[0]
 check("fixed arm flags every live trace", np.isclose(fixed.pi, 1.0))
@@ -189,8 +206,18 @@ except SystemExit as e:
 # 5. bundle helpers
 check("answer clusters: correct share C, equal wrongs share a key",
       BL.cluster_keys(["5", "7", "7", None, "5"], [True, False, False, False, True]) == ["C", "W0", "W0", None, "C"])
-live, pre = BL.cut_flags("so x = 12 and then", "12", True)
-check("a cut that already wrote the answer is live but not pre-answer", live and not pre)
+r = BL.cut_rules("so x = 12 and then", "12", True)
+check("a coincidental mention: pre-answer under the primary rule, not under the strict one",
+      r["live"] and r["pre_answer"] and not r["pre_answer_strict"] and r["pre_answer_think_boxed"], r)
+r = BL.cut_rules("so the answer is 12.", "12", True)
+check("a stated answer is not pre-answer (primary), but is under </think>/boxed only",
+      not r["pre_answer"] and not r["pre_answer_strict"] and r["pre_answer_think_boxed"], r)
+check("cue then another number is still pre-answer", BL.cut_rules("the answer is 112", "12", True)["pre_answer"])
+check("cue on an earlier line does not count", BL.cut_rules("the answer is\n 12", "12", True)["pre_answer"])
+check("cue is case-insensitive, \\dfrac normalized",
+      not BL.cut_rules("Final Answer: \\dfrac{3}{4}", "\\frac{3}{4}", True)["pre_answer"])
+check("a \\boxed answer is not pre-answer under any rule",
+      not any(v for k, v in BL.cut_rules("so \\boxed{7}", "7", True).items() if k != "live"))
 check("a cut past </think> is not live", BL.cut_flags("... </think> x", "3", True) == (False, False))
 samples = pd.DataFrame({"problem_id": [0] * 4, "trace_id": [""] * 4, "checkpoint": [0] * 4, "sample_idx": range(4),
                         "correct": [1, 0, 1, 1], "n_gen": [10, 20, 30, 40]})
@@ -293,6 +320,20 @@ got = {(r.trace_id, r.checkpoint): (r.live, r.pre_answer) for r in ct.itertuples
 check("cuts: only checkpoints a trace runs past", set(got) == {("7_0", 2), ("7_0", 4), ("7_1", 2)}, sorted(got))
 check("cuts: </think> inside the cut makes it not live", got[("7_0", 4)] == (False, False) and got[("7_0", 2)] == (False, False)
       and got[("7_1", 2)] == (True, True), got)
+check("cuts: all three pre-answer columns written", {"pre_answer_strict", "pre_answer_think_boxed"} <= set(ct.columns))
+
+import power as W  # noqa: E402
+import discordance as DC  # noqa: E402
+check("power reproduces Jaden's McNemar (N 1000, q .25, d .05)", abs(W.mcnemar_power(1000, .25, .05) - .8763091) < 1e-6)
+check("power reproduces Jaden's Tango rule-out (N 1000, q .25, d 0)", abs(W.ruleout_power(1000, .25, 0.0) - .9346756) < 1e-6)
+check("power reproduces Jaden's N 900 rows", abs(W.mcnemar_power(900, .25, .05) - .8382798) < 1e-6
+      and abs(W.ruleout_power(900, .25, 0.0) - .9110449) < 1e-6)
+dc = DC.run(os.path.join(tmp, "b"), n=200, log=lambda *a: None)
+row = pol[(pol.checkpoint == 4096) & (pol.monitor == "lr_raw_L20") & (pol.action == "restart")
+          & pol.comparator.str.startswith("aggregate m=2")].iloc[0]
+check("discordance: d vs aggregation equals the dry run's primary delta", np.isclose(dc["comparators"]["aggregate2"]["d"], row.delta[0]),
+      (dc["comparators"]["aggregate2"]["d"], row.delta[0]))
+check("discordance: shared-source q <= independent q", all(v["q_shared"] <= v["q_indep"] + 1e-9 for v in dc["comparators"].values()))
 
 print(f"\n{'all passed' if not fails else f'{len(fails)} FAILED: {fails}'}")
 sys.exit(1 if fails else 0)

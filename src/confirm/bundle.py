@@ -68,8 +68,9 @@ def main():
     sources = src[["trace_id", "problem_id", "n", "correct"]].assign(answer_key=src.trace_id.map(src_keys))
 
     full = pd.DataFrame([{"trace_id": t, "checkpoint": c} for t in src.trace_id for c in sorted(feats.checkpoint.unique())])
-    cuts = full.merge(feats[["trace_id", "checkpoint", "live", "pre_answer"]], how="left", on=["trace_id", "checkpoint"])
-    cuts[["live", "pre_answer"]] = cuts[["live", "pre_answer"]].fillna(False).astype(bool)
+    flags = ["live", *B.PRE_COLS]
+    cuts = full.merge(feats[["trace_id", "checkpoint", *flags]], how="left", on=["trace_id", "checkpoint"])
+    cuts[flags] = cuts[flags].fillna(False).astype(bool)
 
     monitors, man = B.load_monitors(a.monitors)
     parts = []

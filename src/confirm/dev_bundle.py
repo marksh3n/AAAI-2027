@@ -88,8 +88,7 @@ def main():
         ids = tab.trace_id.tolist()
         texts = store.text(ck, ids)
         for tid, txt in zip(ids, texts):
-            live, pre = B.cut_flags(txt, tr.at[tid, "answer"], True)
-            cut_rows.append({"trace_id": tid, "checkpoint": c, "live": live, "pre_answer": pre})
+            cut_rows.append({"trace_id": tid, "checkpoint": c, **B.cut_rules(txt, tr.at[tid, "answer"], True)})
         X = store.hidden(ck, ids, spec.LAYER)
         score_parts.append(B.score_rows(monitors, c, ids, X, texts, tab.tokens.values.astype(float)))
     scores = pd.concat(score_parts, ignore_index=True)
@@ -102,7 +101,7 @@ def main():
     print(f"scores: {len(scores)} rows, {n_oof} out-of-fold (training traces), the rest out-of-sample")
     cuts = pd.DataFrame(cut_rows)
     seen = set(zip(cuts.trace_id, cuts.checkpoint))
-    cuts = pd.concat([cuts, pd.DataFrame([{"trace_id": t, "checkpoint": c, "live": False, "pre_answer": False}
+    cuts = pd.concat([cuts, pd.DataFrame([{"trace_id": t, "checkpoint": c, "live": False, **dict.fromkeys(B.PRE_COLS, False)}
                                           for t in tr.trace_id for c in spec.CHECKPOINTS if (t, c) not in seen])],
                      ignore_index=True)
     bank = B.bank_table(samples[["problem_id", "trace_id", "checkpoint", "sample_idx", "round", "correct", "n_gen"]]

@@ -2,7 +2,8 @@
 # input: a bundle directory (bundle.py writes one from the GPU outputs, dev_bundle.py from the
 # development data, same schema), plus the frozen monitors' scores (score.py):
 #   sources.parquet   trace_id, problem_id, n (generated tokens, EOS included), correct (0/1), answer_key
-#   cuts.parquet      trace_id, checkpoint, live, pre_answer
+#   cuts.parquet      trace_id, checkpoint, live, pre_answer (spec.PRE_ANSWER_PRIMARY), pre_answer_strict,
+#                     pre_answer_think_boxed (the two pre-registered sensitivity rules)
 #   bank.parquet      problem_id, trace_id ("" for t0), checkpoint (0 for t0), k, r, L, r_h0, r_h1, L_h0, L_h1
 #   t0_votes.parquet  problem_id, sample_idx, answer_key, correct, n_gen
 #   scores.parquet    trace_id, checkpoint, monitor, score, threshold
@@ -67,7 +68,9 @@ def attempts(src, cuts, bank, votes, c, unbanked, keep="outcome"):
     t = src.set_index("trace_id")
     cc = cuts[cuts.checkpoint == c].set_index("trace_id")
     t["live"] = cc.live.reindex(t.index).fillna(False).astype(bool)
-    t["pre_answer"] = cc.pre_answer.reindex(t.index).fillna(False).astype(bool)
+    for col in ("pre_answer", "pre_answer_strict", "pre_answer_think_boxed"):
+        v = cc[col] if col in cc else cc.pre_answer  # older bundles hold the primary rule only
+        t[col] = v.reindex(t.index).fillna(False).astype(bool)
     t["unbanked"] = [(i, c) in unbanked for i in t.index]
     t["live_all"] = t.live.copy()  # monitors are scored on every live trace
     t["live"] &= ~t.unbanked  # dev only: a live cut with no bank cannot be flagged
@@ -214,6 +217,11 @@ def aurocs(t, scores, c, n_boot, label):
     return out, boots
 
 
+def mixed_count(rows):
+    g = rows.groupby("problem_id").correct.agg(lambda v: 0 < v.sum() < len(v))
+    return int(g.sum())
+
+
 def populations(src, cuts):
     rows = []
     ck = sorted(cuts.checkpoint.unique())
@@ -225,13 +233,18 @@ def populations(src, cuts):
         mixed = lv.groupby("problem_id").correct.agg(lambda v: 0 < v.sum() < len(v))
         rows.append({"checkpoint": c, "attempts": len(src), "problems": src.problem_id.nunique(),
                      "live": int(cc.live.sum()), "live_problems": lv.problem_id.nunique(),
-                     "live_mixed_problems": int(mixed.sum()), "live_pre_answer": int((cc.live & cc.pre_answer).sum()),
+                     "live_mixed_problems": int(mixed.sum()),
+                     **{f"live_{k}": int((cc.live & cc.get(k, cc.pre_answer)).sum())
+                        for k in ("pre_answer", "pre_answer_strict", "pre_answer_think_boxed")},
+                     **{f"mixed_{k}": mixed_count(cc[cc.live & cc.get(k, cc.pre_answer)])
+                        for k in ("pre_answer", "pre_answer_strict", "pre_answer_think_boxed")},
                      "matched_cohort": len(matched), "live_accuracy": float(lv.correct.mean()) if len(lv) else np.nan})
     return pd.DataFrame(rows), matched
 
 
-def tests(vec, auc_boot, auc_est, margin):
-    # primary: both token-matched comparators; secondary: Holm over spec.SECONDARY
+def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
+    # primary: both token-matched comparators; secondary: Holm over spec.SECONDARY. s7_mixed: mixed problems
+    # among live pre-answer cuts at S7's checkpoint; below spec.S7_MIN_MIXED, S7 is estimate-only (no p, not in Holm)
     out = {}
     pr = spec.PRIMARY
     for comp in ("random", f"aggregate{spec.AGG_EXTRA[0]}"):
@@ -243,7 +256,8 @@ def tests(vec, auc_boot, auc_est, margin):
         out[f"primary vs {comp}"] = {"delta": est, "ci": [lo, hi], "p": wald_p(est, v[1:])}
     ok = [out[k] for k in out if k.startswith("primary")]
     if margin is None:
-        verdict = "not evaluated: Jaden's margin slot (spec.JADEN['margin_pp']) is empty"
+        verdict = (f"not evaluated: Jaden's slots are {spec.JADEN.get('status')}, not frozen"
+                   if spec.JADEN.get("status") != "frozen" else "not evaluated: Jaden's margin slot is empty")
     elif any(o is None for o in ok):
         verdict = "not evaluable on this bundle"
     else:
@@ -258,7 +272,10 @@ def tests(vec, auc_boot, auc_est, margin):
                 d = b[s["monitor"]] - b[s["vs"]]
                 est = auc_est[key][s["monitor"]] - auc_est[key][s["vs"]]
                 lo, hi = S.ci(d)
-                sec.append({**s, "delta": est, "ci": [lo, hi], "p": wald_p(est, d)})
+                if s7_mixed is None or s7_mixed < spec.S7_MIN_MIXED:
+                    sec.append({**s, "delta": est, "ci": [lo, hi], "estimate_only": True, "mixed": s7_mixed})
+                else:
+                    sec.append({**s, "delta": est, "ci": [lo, hi], "p": wald_p(est, d), "mixed": s7_mixed})
             else:
                 sec.append({**s, "delta": None})
             continue
@@ -273,7 +290,7 @@ def tests(vec, auc_boot, auc_est, margin):
             continue
         est, lo, hi = summ(v)
         sec.append({**s, "delta": est, "ci": [lo, hi], "p": wald_p(est, v[1:])})
-    have = [r for r in sec if r.get("delta") is not None]
+    have = [r for r in sec if r.get("delta") is not None and not r.get("estimate_only")]
     if have:
         for r, h in zip(have, S.holm([r["p"] for r in have])):
             r["p_holm"] = float(h)
@@ -297,6 +314,8 @@ def run(bundle, out, n_boot=spec.N_BOOT, log=print, keep="outcome"):
             pol_rows += rows
             vec.update({(c, *k): x for k, x in v.items()})
         pops_auc = [("live", t.live_all), ("live, pre-answer", t.live_all & t.pre_answer),
+                    ("live, pre-answer (sensitivity: strict value match)", t.live_all & t.pre_answer_strict),
+                    ("live, pre-answer (sensitivity: </think> and \\boxed only)", t.live_all & t.pre_answer_think_boxed),
                     ("matched cohort", t.trace_id.isin(matched) & t.live_all)]
         if t.unbanked.any() and c in set(bank.checkpoint):
             pops_auc.append(("live with a rollout bank (r_hat vs monitors)", t.live))
@@ -306,8 +325,10 @@ def run(bundle, out, n_boot=spec.N_BOOT, log=print, keep="outcome"):
             if label == "live, pre-answer":
                 auc_boot[(c, "pre_answer")] = b
                 auc_est[(c, "pre_answer")] = {x["score"]: x["auroc"] for x in r}
-    margin = spec.JADEN["margin_pp"]
-    res = tests(vec, auc_boot, auc_est, margin)
+    margin = spec.JADEN["margin_pp"] if spec.JADEN.get("status") == "frozen" else None
+    s7c = next(s["checkpoint"] for s in spec.SECONDARY if s.get("kind") == "auroc_pre_answer")
+    s7_mixed = pops.loc[pops.checkpoint == s7c, "mixed_pre_answer"]
+    res = tests(vec, auc_boot, auc_est, margin, int(s7_mixed.iloc[0]) if len(s7_mixed) else None)
     os.makedirs(out, exist_ok=True)
     pol = pd.DataFrame(pol_rows)
     pol.to_csv(os.path.join(out, "policies.csv"), index=False)
@@ -394,8 +415,10 @@ def report(meta, pops, pol, auc, res, dev, n_unbanked):
             continue
         unit = "" if s.get("kind") == "auroc_pre_answer" else " pp"
         f = (lambda x: f"{x:+.3f}") if unit == "" else pp
+        tail = (f"estimate only: {s['mixed']} mixed problems < {spec.S7_MIN_MIXED}, no claim, not in the Holm family"
+                if s.get("estimate_only") else f"Holm p {s.get('p_holm', float('nan')):.3f}")
         L.append(f"- {s['id']} ({s.get('kind', s.get('action'))} at {s['checkpoint']}, {s['monitor']} vs {s['vs']}): "
-                 f"{f(s['delta'])}{unit} [{f(s['ci'][0])}, {f(s['ci'][1])}], Holm p {s.get('p_holm', float('nan')):.3f}")
+                 f"{f(s['delta'])}{unit} [{f(s['ci'][0])}, {f(s['ci'][1])}], {tail}")
     L.append("\nWording: report these as estimates on this cohort. A null here means the tested monitors have not "
              "shown intervention value at equal compute; it does not show that hidden states lack the information.\n")
     return "\n".join(L) + "\n"

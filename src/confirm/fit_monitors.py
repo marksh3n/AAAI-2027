@@ -92,7 +92,7 @@ def main():
     src, meta = store.sources["B_fixed"]
     files = {"traces": os.path.join(a.data, store.reg["traces"]), "acts": os.path.join(a.data, src["acts"]),
              "meta": os.path.join(a.data, src["meta"])}
-    manifest = {"spec_sha256": spec.spec_sha(), "written": time.strftime("%Y-%m-%d %H:%M:%S"),
+    manifest = {"spec_sha256": spec.spec_sha(), "monitor_spec_sha256": spec.monitor_sha(), "written": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "inputs": {k: {"path": os.path.basename(v), "sha256": spec.file_sha(v)} for k, v in files.items()},
                 "code": spec.code_sha(), "versions": _versions(), "monitors": {}}
     oofs = []
