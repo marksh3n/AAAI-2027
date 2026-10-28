@@ -1,5 +1,33 @@
 # Ghait---MJJS
 
+## Results map
+
+Sections of [notebooks/E0_reproduce.ipynb](notebooks/E0_reproduce.ipynb).
+Scripts formerly only `%%writefile` cells in `notebooks/E0_colab.ipynb`: `scripts/colab/`.
+
+| # | result | code | notebook section |
+|---|---|---|---|
+| 0 | data creation: traces, activations, rollouts | `src/generate_vllm.py`, `src/extract.py`, `src/recovery/` | 0 |
+| 1 | between problems, L16 probe 0.887 vs step count 0.854 | `src/probe_cmp/iter1.py` | 1 |
+| 2 | within problem, no checkpoint beats len; end 0.809 vs 0.787 | `src/probe_cmp/run.py`, `report.py` | 2 |
+| 3 | 29 layers × 13 checkpoints; 6144: 0.486 | `scripts/colab/extract_full.py`, `e0_full_table.py` | 3 |
+| 4 | no window/delta view beats chance after Holm; all trail r̂ | `src/probe_cmp/extract_reps.py`, `reps.py` | 4 |
+| 5 | hgb/topk50 at 6144 picked as best cell | `src/probe_cmp/run.py --exploratory` | 5 |
+| 6 | 342/74: tree 0.523 vs len 0.554; no rule gives 197/53 | `src/confirm/provenance_6144.py` | 6 |
+| 7 | frozen fit: tree@6144 0.560 vs len 0.554 | `src/confirm/fit_monitors.py` | 7 |
+| 8 | S7 pre-answer tree − len +0.090 [−0.029, +0.211] | `src/confirm/dev_bundle.py`, `analyze.py` | 8 |
+| 9 | r̂ 0.626 / 0.655 / 0.811; +0.262 over best probe at 4096 | `src/probe_cmp/ceiling.py` | 9 |
+| 10 | rollout-ranked restart +5.7 pp at 4096, q 0.25 | `src/probe_cmp/oracle.py` | 10 |
+| 11 | oracle v1–v3, length-matched: superseded | `src/probe_cmp/oracle.py` | 11 (pointer) |
+| 12 | monitor restart +1.1 pp vs random, +1.6 vs maj@3 | `src/confirm/analyze.py`, `policy.py`, `dev_bundle.py` | 12 (run in 8) |
+| 13 | detect power 0.18–0.51; rule-out of ≥ 5 pp 0.99 | `src/confirm/discordance.py`, `power.py` | 13 |
+| 14 | latest fit, dry run, hashes | `src/confirm/` | 14 |
+| 15 | T̂ ≈ 0.70 in every block | `scripts/colab/temp_blocks.py`, `src/recovery/check_temp.py` | 15 |
+| 16 | lines 0–479 one BOS, 480+ two | `scripts/colab/bos_check.py` | 16 |
+| 17 | rollout − source gap 7.3 / 5.1 / 3.0 pp, unexplained | `scripts/colab/lenfilter.py`, `mixed_sel.py`, `src/probe_cmp/oracle.py --length-matched` | 17 |
+| 18 | 17.6 vs 15.7 slips per 1k claims | `src/injection/slip_scan.py` | 18 |
+| 19 | injected digit error: not run | `src/injection/inject.py` | 19 |
+
 The r(t) ceiling run on Modal: see [RUN_MODAL.md](RUN_MODAL.md).
 
 Confirmation design (monitors, policies, cost accounting, analysis plan):
