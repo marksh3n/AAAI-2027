@@ -1,4 +1,4 @@
-# power of Jaden's two paired tests (one binary outcome per arm per problem), written independently
+# power of the planning design's two paired tests (one binary outcome per arm per problem), written independently
 # of his package and checked against his reported numbers (tests/test_confirm.py):
 #   detect   exact two-sided McNemar at alpha: reject when 2 * min binomial tail of b | b + c <= alpha
 #   rule out Tango's paired score test of H0: delta >= margin, one-sided alpha, asymptotic normal

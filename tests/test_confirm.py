@@ -148,7 +148,7 @@ for sd in range(6):
 check("noise monitor vs token-matched random is unbiased (mean of 6 seeds within 1 pp)", abs(np.mean(deltas)) < 0.01,
       np.round(100 * np.array(deltas), 2))
 check("primary tests are filled", res["primary vs random"] is not None and res["primary vs aggregate2"] is not None)
-check("no verdict while Jaden's slots are pending", res["primary verdict"].startswith("not evaluated"), res["primary verdict"])
+check("no verdict while team slots are pending", res["primary verdict"].startswith("not evaluated"), res["primary verdict"])
 check("S7 pre-answer AUROC test computed", any(s["id"] == "S7" and s.get("delta") is not None for s in res["secondary"]))
 check("secondary family Holm-adjusted", all("p_holm" in s for s in res["secondary"]
                                             if s.get("delta") is not None and not s.get("estimate_only")))
@@ -182,12 +182,12 @@ check("keep=rollout values kept traces at their bank mean: the resample check is
 md = open(os.path.join(tmp, "out", "report.md")).read()
 check("report avoids the retired wording", not any(w in md.lower() for w in ("perfect", "no extra token", "audit but",
                                                                             "cannot correct", "upper bound")))
-spec_saved = spec.JADEN["margin_pp"]
-spec.JADEN["margin_pp"] = 1.0
+spec_saved = spec.SLOTS["margin_pp"]
+spec.SLOTS["margin_pp"] = 1.0
 try:
     check("a margin gives a verdict", A.tests({}, {}, {}, 1.0)["primary verdict"] == "not evaluable on this bundle")
 finally:
-    spec.JADEN["margin_pp"] = spec_saved
+    spec.SLOTS["margin_pp"] = spec_saved
 
 # a confirmation bundle with a hole is refused
 synth = os.path.join(tmp, "b2")
@@ -324,9 +324,9 @@ check("cuts: all three pre-answer columns written", {"pre_answer_strict", "pre_a
 
 import power as W  # noqa: E402
 import discordance as DC  # noqa: E402
-check("power reproduces Jaden's McNemar (N 1000, q .25, d .05)", abs(W.mcnemar_power(1000, .25, .05) - .8763091) < 1e-6)
-check("power reproduces Jaden's Tango rule-out (N 1000, q .25, d 0)", abs(W.ruleout_power(1000, .25, 0.0) - .9346756) < 1e-6)
-check("power reproduces Jaden's N 900 rows", abs(W.mcnemar_power(900, .25, .05) - .8382798) < 1e-6
+check("power reproduces planning McNemar (N 1000, q .25, d .05)", abs(W.mcnemar_power(1000, .25, .05) - .8763091) < 1e-6)
+check("power reproduces planning Tango rule-out (N 1000, q .25, d 0)", abs(W.ruleout_power(1000, .25, 0.0) - .9346756) < 1e-6)
+check("power reproduces planning N 900 rows", abs(W.mcnemar_power(900, .25, .05) - .8382798) < 1e-6
       and abs(W.ruleout_power(900, .25, 0.0) - .9110449) < 1e-6)
 dc = DC.run(os.path.join(tmp, "b"), n=200, log=lambda *a: None)
 row = pol[(pol.checkpoint == 4096) & (pol.monitor == "lr_raw_L20") & (pol.action == "restart")

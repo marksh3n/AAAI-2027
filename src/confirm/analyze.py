@@ -256,8 +256,8 @@ def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
         out[f"primary vs {comp}"] = {"delta": est, "ci": [lo, hi], "p": wald_p(est, v[1:])}
     ok = [out[k] for k in out if k.startswith("primary")]
     if margin is None:
-        verdict = (f"not evaluated: Jaden's slots are {spec.JADEN.get('status')}, not frozen"
-                   if spec.JADEN.get("status") != "frozen" else "not evaluated: Jaden's margin slot is empty")
+        verdict = (f"not evaluated: team slots are {spec.SLOTS.get('status')}, not frozen"
+                   if spec.SLOTS.get("status") != "frozen" else "not evaluated: margin slot is empty")
     elif any(o is None for o in ok):
         verdict = "not evaluable on this bundle"
     else:
@@ -325,7 +325,7 @@ def run(bundle, out, n_boot=spec.N_BOOT, log=print, keep="outcome"):
             if label == "live, pre-answer":
                 auc_boot[(c, "pre_answer")] = b
                 auc_est[(c, "pre_answer")] = {x["score"]: x["auroc"] for x in r}
-    margin = spec.JADEN["margin_pp"] if spec.JADEN.get("status") == "frozen" else None
+    margin = spec.SLOTS["margin_pp"] if spec.SLOTS.get("status") == "frozen" else None
     s7c = next(s["checkpoint"] for s in spec.SECONDARY if s.get("kind") == "auroc_pre_answer")
     s7_mixed = pops.loc[pops.checkpoint == s7c, "mixed_pre_answer"]
     res = tests(vec, auc_boot, auc_est, margin, int(s7_mixed.iloc[0]) if len(s7_mixed) else None)
@@ -366,7 +366,7 @@ def report(meta, pops, pol, auc, res, dev, n_unbanked):
                  "thresholds and the design were chosen on them), the rollout bank covers only the dev ceiling cohort "
                  f"({n_unbanked} live cuts have no bank and are treated as not flaggable), and dev sources and "
                  "rollouts came from different engines. Nothing below may be cited as a result.\n")
-    L.append(f"Jaden's slots (hash {spec.jaden_sha()[:16]}): {json.dumps(spec.JADEN)}\n")
+    L.append(f"Team slots (hash {spec.slots_sha()[:16]}): {json.dumps(spec.SLOTS)}\n")
     L.append(f"Spec {spec.spec_sha()[:16]}; bundle: {json.dumps({k: v for k, v in meta.items() if k not in ('provenance', 'files')})}\n")
     L.append("## Populations\n")
     L.append("Accuracy endpoints use every attempt of every problem. *live* = still generating after c tokens and "

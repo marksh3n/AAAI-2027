@@ -61,11 +61,11 @@ def load_problems(path):
 
 def cmd_t0(a):
     sha = spec.file_sha(a.problems)
-    want = spec.JADEN["problems_file_sha256"]
-    if spec.JADEN.get("status") != "frozen" and not a.smoke:
-        raise SystemExit(f"Jaden's slots are {spec.JADEN.get('status')}, not frozen")
+    want = spec.SLOTS["problems_file_sha256"]
+    if spec.SLOTS.get("status") != "frozen" and not a.smoke:
+        raise SystemExit(f"team slots are {spec.SLOTS.get('status')}, not frozen")
     if want is None and not a.smoke:
-        raise SystemExit("spec.JADEN['problems_file_sha256'] is empty: the confirmation population is not frozen yet")
+        raise SystemExit("spec.SLOTS['problems_file_sha256'] is empty: the confirmation population is not frozen yet")
     if want is not None and sha != want and not a.smoke:
         raise SystemExit(f"{a.problems} has sha256 {sha}, the frozen list is {want}")
     probs = load_problems(a.problems)[: (2 if a.smoke else None)]

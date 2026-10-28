@@ -1,8 +1,8 @@
 # where the dev 6144 "top-neuron tree" number comes from. CPU, no model. three numbers circulate:
-#   Ghait's memo (PR #5, analysis/E0_FINDINGS.md): 197 traces / 53 mixed problems, depth-3 tree on 50
+#   PR #5 memo (analysis/E0_FINDINGS.md): 197 traces / 53 mixed problems, depth-3 tree on 50
 #     training-selected layer-20 neurons, within-problem AUROC .642 / .679 / .642 over three grouped fold
 #     assignments, observable-prefix baseline .553 / .572 / .553
-#   Jaden's exports (jaden/confirmation-planning): e0_6144_preds_pop342.csv (342 / 74) tree .523,
+#   planning exports (branch jaden/confirmation-planning): e0_6144_preds_pop342.csv (342 / 74) tree .523,
 #     len .554, tfidf .545; e0_6144_preds_cohort227.csv (227 / 59) tree .573, len .568, tfidf .440
 # the tree is probe_cmp's hgb/topk50 (models.py): HistGradientBoosting, max_depth 3, 150 rounds, on the
 # 50 columns with the largest within-problem |AUROC - .5| in the training fold. this script rebuilds
@@ -93,19 +93,19 @@ def main():
     ap.add_argument("--data", default="data")
     ap.add_argument("--registry", default=D.REGISTRY)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--jaden", nargs="*", default=[], help="Jaden's e0_6144_preds_*.csv, to compare trace sets")
+    ap.add_argument("--exports", nargs="*", default=[], help="e0_6144_preds_*.csv exports, to compare trace sets")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     store = D.Store(a.data, reg=D.load_registry(a.registry), names=["B_fixed"])
     rules = candidates(store)
     rows = []
-    print("candidate cohorts (traces / mixed problems); Ghait's memo cites 197 / 53")
+    print("candidate cohorts (traces / mixed problems); PR #5 memo cites 197 / 53")
     for name, pop in rules.items():
         n, m = len(pop), pop.problem_id.nunique()
         rows.append({"rule": name, "traces": n, "mixed_problems": m, "matches_197_53": (n, m) == TARGET})
         print(f"  {n:4d} / {m:3d}  {'<== 197 / 53' if (n, m) == TARGET else '':12s} {name}")
     pd.DataFrame(rows).to_csv(os.path.join(a.out, "cohorts.csv"), index=False)
-    for path in a.jaden:
+    for path in a.exports:
         j = pd.read_csv(path)
         for name, pop in rules.items():
             if set(pop.trace_id) == set(j.trace_id):
@@ -126,7 +126,7 @@ def main():
     if res:
         pd.concat(res).to_csv(os.path.join(a.out, "auroc_by_seed.csv"), index=False)
     json.dump({"memo": "PR #5 analysis/E0_FINDINGS.md: 197/53, tree .642/.679/.642, baseline .553/.572/.553",
-               "jaden": {"pop342": {"tree": .523, "len": .554, "tfidf": .545},
+               "exports": {"pop342": {"tree": .523, "len": .554, "tfidf": .545},
                          "cohort227": {"tree": .573, "len": .568, "tfidf": .440}}},
               open(os.path.join(a.out, "cited.json"), "w"), indent=1)
 

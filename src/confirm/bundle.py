@@ -53,7 +53,7 @@ def main():
     bank = bank_samples(read_rows(a.bank))
     feats = pd.read_parquet(os.path.join(a.feats, "feats.parquet"))
     acts = np.load(os.path.join(a.feats, f"acts_L{spec.LAYER}.npy")).astype(np.float32)
-    want = spec.JADEN["samples_per_problem"]
+    want = spec.SLOTS["samples_per_problem"]
     if a.kind == "confirmation" and want is not None and (src.groupby("problem_id").size() != want).any():
         raise SystemExit(f"not every problem has {want} source traces")
 

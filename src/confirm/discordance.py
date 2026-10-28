@@ -1,4 +1,4 @@
-# what the dev dry run implies for Jaden's paired design (one binary outcome per arm per problem):
+# what the dev dry run implies for the paired planning design (one binary outcome per arm per problem):
 # the effect d and the discordance q = P(the two arms disagree on a problem), for the primary policy
 # (spec.PRIMARY at its frozen threshold) against token-matched aggregation m=2 and random restart,
 # then the power of his two tests (power.py) at those values. per attempt, from the bundle's
@@ -66,7 +66,7 @@ def run(bundle, traces=None, n=1000, margin=None, log=print):
     res = {"checkpoint": c, "problems": int(t.problem_id.nunique()), "attempts": len(t), "comparators": implied(t, scores, c)}
     if traces:
         res["dilution"] = dev_share(traces, res["problems"])
-    margin = (spec.JADEN["margin_pp"] or 5.0) / 100 if margin is None else margin
+    margin = (spec.SLOTS["margin_pp"] or 5.0) / 100 if margin is None else margin
     rows = []
     for name, v in res["comparators"].items():
         scen = [("shared source", v["q_shared"], v["d"]), ("independent", v["q_indep"], v["d"])]
@@ -79,12 +79,12 @@ def run(bundle, traces=None, n=1000, margin=None, log=print):
             rows.append({"comparator": name, "pairing": label, "n": n, "q": q, "d": d,
                          "mcnemar_detect": W.mcnemar_power(n, q, d_use),
                          "tango_rule_out": W.ruleout_power(n, q, d_use, margin)})
-    rows.append({"comparator": "Jaden's assumption", "pairing": "-", "n": n, "q": 0.25, "d": 0.05,
+    rows.append({"comparator": "planning assumption", "pairing": "-", "n": n, "q": 0.25, "d": 0.05,
                  "mcnemar_detect": W.mcnemar_power(n, 0.25, 0.05), "tango_rule_out": W.ruleout_power(n, 0.25, 0.0, margin)})
     res["power"] = rows
     log(json.dumps({k: v for k, v in res.items() if k != "power"}, indent=1))
     log(f"\npower at N={n}, McNemar two-sided .05 against 0; Tango one-sided .05 against d >= {margin:.2f} "
-        "(Jaden's row: rule-out at true d = 0)")
+        "(planning row: rule-out at true d = 0)")
     log(pd.DataFrame(rows).to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     return res
 

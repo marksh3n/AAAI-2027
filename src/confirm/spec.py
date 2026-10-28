@@ -1,7 +1,7 @@
 # frozen design of the monitor / policy comparison for the confirmation run. every confirm/ script
 # reads its constants from here, and docs/CONFIRMATION_SPEC.md states the same design in words.
 # changing anything below after confirmation data exists makes the run exploratory.
-# Jaden's slots (population, margin, sample size) are None until he fills them; analyze.py runs
+# team slots (population, margin, sample size) stay None until filled; analyze.py runs
 # on development data without them but refuses to print a confirmatory verdict.
 import hashlib, json, os
 
@@ -81,20 +81,20 @@ BOOT_SEED = 0
 K_PREFIX = 8  # continuations per live (trace, checkpoint)
 K_T0 = 8  # fresh samples per problem: restart replacements and the aggregation votes
 
-# ---- Jaden's slots: parameters, not decisions made here. filled 2026-10-27 from his planning package
+# ---- team slots: parameters, not decisions made here. filled 2026-10-27 from the planning package
 # (Jaden_Accuracy_Planning_Handoff_q025.zip, protocol status "awaiting_policy_and_freshness_check") and
 # PENDING TEAM CHOICE: analyze.py gives no primary verdict and gpu_prep.py refuses to start until
-# "status" is "frozen". docs/CONFIRMATION_SPEC.md section 11 lists where his design and this spec conflict
-JADEN = {
+# "status" is "frozen". docs/CONFIRMATION_SPEC.md lists where the planning design and this spec conflict
+SLOTS = {
     "status": "pending_team_choice",
     "source": "Jaden_Accuracy_Planning_Handoff_q025.zip, protocol/confirmation_protocol.json (2026-10-26)",
     "problem_ids_csv_sha256": "6609db7bea9205ab00d3c733edb1d4e6d415b5348001a0112e2f1e40fd050d86",
-    # confirmation_after_pilot_1000.csv, original reservation positions 101-1100 (his recommended disjoint set)
+    # confirmation_after_pilot_1000.csv, original reservation positions 101-1100 (recommended disjoint set)
     "pilot_ids_csv_sha256": "aef5c628b0984a1a98615969af62726fd02bb7bad9edd44d53e9e9b30ae2644e",  # pilot_first_100.csv
-    "problems_file_sha256": None,  # the jsonl gpu_prep.py reads (prompt + gold per id); built from his ids, not yet
+    "problems_file_sha256": None,  # the jsonl gpu_prep.py reads (prompt + gold per id); built from the id list, not yet
     "n_problems": 1000,
-    "samples_per_problem": None,  # his design: 1 outcome per arm per problem; ours needs several (conflict 3)
-    "margin_pp": 5.0,  # his: a useful gain, powered for and ruled out above; ours: a superiority margin (conflict 7)
+    "samples_per_problem": None,  # planning design: 1 outcome per arm per problem; ours needs several (conflict 3)
+    "margin_pp": 5.0,  # planning: a useful gain, powered for and ruled out above; ours: a superiority margin (conflict 7)
     "endpoint": "paired final-answer accuracy, monitor vs aggregation, one outcome per arm per problem: exact "
                 "McNemar superiority (two-sided .05) and one-sided Tango score test ruling out a difference >= 5 pp",
     "expected_mixed_6144_stated": 0,  # one sample per problem has no within-problem pairs: S7 not evaluable
@@ -102,8 +102,8 @@ JADEN = {
 
 
 def frozen():
-    # Siddhant's part (everything above except JADEN), for manifests and the hash in the doc. Jaden's
-    # slots are hashed apart (jaden_sha), so filling them does not invalidate the fitted monitors
+    # frozen design (everything above except SLOTS), for manifests and the hash in the doc. the slots
+    # are hashed apart (slots_sha), so filling them does not invalidate the fitted monitors
     keys = ["MODEL", "MODEL_REVISION", "TOKENIZER_REVISION", "VLLM_VERSION", "TRANSFORMERS_VERSION", "DTYPE",
             "TEMPERATURE", "TOP_P", "MAX_NEW", "BOS", "INSTRUCTION", "CHECKPOINTS", "DECISION", "BACKTRACK_TO",
             "LAYER", "THINK_END", "ANSWER_CUES", "ANSWER_CUE_WINDOW", "PRE_ANSWER_PRIMARY", "PRE_ANSWER_SENSITIVITY",
@@ -127,8 +127,8 @@ def monitor_sha():
     return hashlib.sha256(json.dumps({k: g[k] for k in MONITOR_KEYS}, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def jaden_sha():
-    return hashlib.sha256(json.dumps(JADEN, sort_keys=True, default=str).encode()).hexdigest()
+def slots_sha():
+    return hashlib.sha256(json.dumps(SLOTS, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def file_sha(path):

@@ -11,16 +11,15 @@ Code: `src/recovery/build_prefixes.py --design ceiling`, `src/recovery/run_rollo
 `src/recovery/check_temp.py`, `scripts/modal_app.py`. Everything lives on the Volume
 `e0-recovery`: `/inputs`, `/outputs`, and `/hf` for the model cache.
 
-## For whoever runs this
+## Before you start
 
 - Check out branch `siddhant/recovery-modal`. `data/` is not in git; the traces come from
   the HF dataset `MarkSh3n/e0-shared` (see "Once"). The file must have 2202 lines, and
   its SHA-256 must start with `c8cb3d8f9b21453b`, the copy the prefixes were designed
-  on. If the hash differs, tell Siddhant before going on.
+  on. If the hash differs, stop.
 - Run the steps in order. **Stop after step 2 if the temp check doesn't print
-  `VERDICT: T=0.7 is clearly best`.** **Stop after step 4 and send Siddhant the last ~30
-  log lines of each benchmark** (tok/s and the tier projections). Start step 5 only after
-  he says go.
+  `VERDICT: T=0.7 is clearly best`.** **Stop after step 4** and post the last ~30 log
+  lines of each benchmark (tok/s, tier projections). Step 5 only after sign-off.
 - If a step fails, send the full error; don't work around it. If the T4 smoke test fails
   inside vLLM, add `--gpu h100` to rerun it; that costs about $0.50.
 - `--budget` for step 5 is the Modal credit left at that point (Settings → Usage).

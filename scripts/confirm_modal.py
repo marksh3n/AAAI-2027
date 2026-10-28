@@ -1,6 +1,6 @@
 # Modal wrapper for the confirmation data run; usage and order in docs/RUN_CONFIRM_GPU.md. Same
 # pattern as modal_app.py, its own app and Volume ("e0-confirm"):
-#   /vol/inputs   problems.jsonl (Jaden's frozen list)
+#   /vol/inputs   problems.jsonl (the frozen problem list)
 #   /vol/outputs  t0.jsonl, sources.jsonl, feats/, cuts.jsonl, bank.jsonl (+ .config.json / ledgers)
 #   /vol/hf       HF_HOME
 # every GPU step resumes: run_rollouts skips (prefix, round) rows already written.
@@ -123,9 +123,9 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0):
     if step == "t0":
         on_cpu.remote([[PREP, "t0", "--problems", f"{INP}/problems.jsonl", "--out", t0]])
     elif step == "sources":
-        n = samples or spec.JADEN["samples_per_problem"]
+        n = samples or spec.SLOTS["samples_per_problem"]
         if not n:
-            raise SystemExit("--samples is required until spec.JADEN['samples_per_problem'] is frozen")
+            raise SystemExit("--samples is required until spec.SLOTS['samples_per_problem'] is frozen")
         if not budget:
             raise SystemExit("--budget is required (the Modal credit left, in $)")
         GPU_FNS[gpu].remote([runner(t0, src, 0, n, "full", gpu, budget, key)])

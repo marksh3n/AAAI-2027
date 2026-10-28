@@ -1,9 +1,8 @@
-# Development runs for the confirmation spec (Colab, CPU runtime)
+# Dev runs for the confirmation spec (Colab, CPU)
 
-These need the real dev data, so they run in E0-Pass1, not on the Mac. A CPU runtime is enough:
-nothing here loads the model. Push the branch first so `checkout(BRANCH)` picks up `src/confirm`.
-Cell 0 is self-contained, so no other setup cell is needed in a fresh runtime. Outputs go to
-`MyDrive/e0_confirm`, and nothing is uploaded to HF.
+Real dev data, so Colab, not local; CPU runtime, nothing loads the model. Push the branch first so
+`checkout(BRANCH)` picks up `src/confirm`. Cell 0 is self-contained. Outputs: `MyDrive/e0_confirm`;
+nothing uploaded to HF.
 
 ```python
 # confirm 0 (CPU runtime, once per runtime): GitHub PAT, repo on BRANCH, Drive, HF token, traces_B
@@ -44,7 +43,7 @@ print('traces_B sha256', hashlib.sha256(open('data/traces_B.jsonl', 'rb').read()
 ```
 
 ```python
-# confirm A (CPU, ~3 min): branch, p32k dev arrays, ceiling rollouts, Jaden's two 6144 exports; unit tests
+# confirm A (CPU, ~3 min): branch, p32k dev arrays, ceiling rollouts, two 6144 prediction exports; unit tests
 checkout(BRANCH)
 %cd /content/Ghait---MJJS
 import os, shutil, subprocess
@@ -67,7 +66,7 @@ for n in ['pop342', 'cohort227']:
 ```python
 # confirm B (CPU, ~20-30 min): where the 6144 tree numbers come from (task 1)
 !python -u src/confirm/provenance_6144.py --data data --out {CONF}/provenance_6144 \
-    --jaden /content/pop342.csv /content/cohort227.csv 2>&1 | tee {CONF}/provenance_6144.log
+    --exports /content/pop342.csv /content/cohort227.csv 2>&1 | tee {CONF}/provenance_6144.log
 ```
 
 ```python
@@ -97,7 +96,7 @@ for n in ['pop342', 'cohort227']:
 ```
 
 ```python
-# confirm F (CPU, ~1 min): effect and discordance for Jaden's paired design, and power of his tests
+# confirm F (CPU, ~1 min): effect and discordance for the paired planning design, and power of its tests
 !python -u src/confirm/discordance.py --bundle {CONF}/dev_bundle --traces data/traces_B.jsonl \
     --out {CONF}/discordance.json 2>&1 | tee {CONF}/discordance.log
 ```

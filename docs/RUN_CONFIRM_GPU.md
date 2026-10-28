@@ -1,7 +1,7 @@
-# Confirmation data run on Modal (for Mark)
+# Confirmation data run on Modal
 
-This generates the confirmation sources, their layer-20 states, and the rollout bank, all under
-one pinned engine. The design is in `docs/CONFIRMATION_SPEC.md`. Code:
+Confirmation sources, their layer-20 states and the rollout bank, under one pinned engine.
+Design: `docs/CONFIRMATION_SPEC.md`. Code:
 
 - `scripts/confirm_modal.py`
 - `src/confirm/gpu_prep.py`
@@ -9,12 +9,12 @@ one pinned engine. The design is in `docs/CONFIRMATION_SPEC.md`. Code:
 
 The Modal app and Volume are `e0-confirm`, separate from the ceiling run's `e0-recovery`.
 
-**Do not start step 1 until both of these are true:**
+**Start step 1 only when both hold:**
 
-- (a) Siddhant confirms the spec commit has been pushed, or its hashes sent to Ghait;
-- (b) Jaden has filled `spec.JADEN` (problem-list sha256, samples per problem) on that commit.
+- (a) the spec commit is pushed, or its hashes sent to the mentor;
+- (b) `spec.SLOTS` is filled (problem-list sha256, samples per problem) on that commit.
 
-`gpu_prep.py t0` refuses a problem file whose sha256 differs from `spec.JADEN["problems_file_sha256"]`.
+`gpu_prep.py t0` refuses a problem file whose sha256 differs from `spec.SLOTS["problems_file_sha256"]`.
 
 ## Once
 
@@ -23,25 +23,25 @@ The Modal setup is the same as `RUN_MODAL.md` ("Once"). Then:
 ```bash
 git switch siddhant/recovery-modal && git pull
 modal volume create e0-confirm                      # "already exists" is fine
-modal volume put --force e0-confirm <jaden's problems.jsonl> /inputs/problems.jsonl
+modal volume put --force e0-confirm <frozen problems.jsonl> /inputs/problems.jsonl
 ```
 
 `problems.jsonl` has one JSON object per line with `problem_id`, `problem` and `gold`.
 
 ## Steps
 
-Run them in order from the repo root. If a step fails, send Siddhant the full error and don't
+Run them in order from the repo root. If a step fails, post the full error; don't
 work around it. Each GPU step resumes where it stopped, so rerunning the same command is safe.
 
 ```bash
 # 0. smoke (T4, ~10 min, < $1): the whole chain on 2 bundled problems, small caps; must end with
-#    "smoke check passed". Send Siddhant the last 40 lines either way.
+#    "smoke check passed". Post the last 40 lines either way.
 modal run scripts/confirm_modal.py --step smoke
 
 # 1. prompts (CPU): one-BOS prompt ids for every problem -> /outputs/t0.jsonl
 modal run scripts/confirm_modal.py --step t0
 
-# 2. source traces (GPU): spec.JADEN["samples_per_problem"] per problem, every token id saved
+# 2. source traces (GPU): spec.SLOTS["samples_per_problem"] per problem, every token id saved
 modal run --detach scripts/confirm_modal.py --step sources --gpu h100 --budget <credit left in $>
 
 # 3. layer-20 states at 2048 / 4096 / 6144 from the exact token ids (GPU)
@@ -60,7 +60,7 @@ modal run scripts/confirm_modal.py --step status
 modal volume get e0-confirm /outputs ./confirm_outputs
 ```
 
-The steps 2 and 5 commands above have no `--samples` flag. If `spec.JADEN["samples_per_problem"]`
+The steps 2 and 5 commands above have no `--samples` flag. If `spec.SLOTS["samples_per_problem"]`
 is still empty when you reach step 2, stop and ask; don't pass `--samples` yourself.
 
 ## What the smoke test checks
@@ -77,7 +77,7 @@ The sampler config written next to each output (`*.config.json`) records the mod
 vLLM version, temperature, top_p and the cap. `bundle.py` refuses sources and bank that differ in
 any of them.
 
-## After the GPU steps (CPU, Siddhant)
+## After the GPU steps (CPU)
 
 ```bash
 python src/confirm/bundle.py --sources confirm_outputs/sources.jsonl --bank confirm_outputs/bank.jsonl \
