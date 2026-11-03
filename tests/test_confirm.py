@@ -189,6 +189,36 @@ try:
 finally:
     spec.SLOTS["margin_pp"] = spec_saved
 
+# win rule: superiority vs 0 on both comparators; per comparator, a gain >= margin ruled out by the one-sided 95% limit
+pk = lambda comp: (spec.PRIMARY["checkpoint"], spec.PRIMARY["monitor"], spec.PRIMARY["action"], comp)
+agg = f"aggregate{spec.AGG_EXTRA[0]}"
+vb = lambda est, lo, hi: np.concatenate([[est], np.linspace(lo, hi, 1001)])
+w_small = A.tests({pk("random"): vb(.02, .005, .035), pk(agg): vb(.02, .006, .034)}, {}, {}, 5.0)
+check("win rule: both lower bounds above 0 is met, though both are below the 5 pp margin",
+      w_small["primary verdict"] == "met", w_small["primary verdict"])
+check("win rule: a small gain rules out >= 5 pp against both comparators",
+      w_small["primary vs random"]["rules_out_margin"] and w_small[f"primary vs {agg}"]["rules_out_margin"])
+w_one = A.tests({pk("random"): vb(.01, -.01, .03), pk(agg): vb(.02, .006, .034)}, {}, {}, 5.0)
+check("win rule: one comparator's CI covering 0 is not met", w_one["primary verdict"] == "not met", w_one["primary verdict"])
+w_big = A.tests({pk("random"): vb(.08, .06, .10), pk(agg): vb(.08, .06, .10)}, {}, {}, 5.0)
+check("win rule: a large gain is met and does not rule out >= 5 pp",
+      w_big["primary verdict"] == "met" and not w_big["primary vs random"]["rules_out_margin"])
+check("win rule: the one-sided limit is the 95th bootstrap percentile",
+      np.isclose(w_big["primary vs random"]["one_sided_95"], np.percentile(vb(.08, .06, .10)[1:], 95)))
+check("win rule: no rule-out while slots are pending", "rules_out_margin" not in
+      A.tests({pk("random"): vb(.02, .005, .035), pk(agg): vb(.02, .006, .034)}, {}, {}, None)["primary vs random"])
+status_saved = spec.SLOTS["status"]
+spec.SLOTS["status"] = "frozen"
+try:
+    _, _, res_f = A.run(os.path.join(tmp, "b"), os.path.join(tmp, "out_f"), n_boot=100, log=lambda *a: None)
+    md_f = open(os.path.join(tmp, "out_f", "report.md")).read()
+    check("frozen slots: the planted monitor gets a verdict and both rule-out lines",
+          res_f["primary verdict"] in ("met", "not met") and md_f.count("pp ruled out (one-sided 95% limit") == 2,
+          res_f["primary verdict"])
+    check("frozen report avoids the retired wording", "upper bound" not in md_f.lower() and "above the margin" not in md_f)
+finally:
+    spec.SLOTS["status"] = status_saved
+
 # a confirmation bundle with a hole is refused
 synth = os.path.join(tmp, "b2")
 synth_bundle(synth, n_problems=10, seed=2)
@@ -334,6 +364,46 @@ row = pol[(pol.checkpoint == 4096) & (pol.monitor == "lr_raw_L20") & (pol.action
 check("discordance: d vs aggregation equals the dry run's primary delta", np.isclose(dc["comparators"]["aggregate2"]["d"], row.delta[0]),
       (dc["comparators"]["aggregate2"]["d"], row.delta[0]))
 check("discordance: shared-source q <= independent q", all(v["q_shared"] <= v["q_indep"] + 1e-9 for v in dc["comparators"].values()))
+
+# 8. problems file from the planning id list (generate.py's heavy imports are stubbed above)
+import build_problems as BP  # noqa: E402
+ds = [{"problem": "What is  1+1?\n", "solution": "So \\boxed{2}.", "level": "Level 3", "type": "Algebra"},
+      {"problem": "Find the ﬁrst x.", "solution": "x = \\boxed{\\frac{1}{2}}", "level": "Level 5", "type": "Geometry"},
+      {"problem": "Same text", "solution": "\\boxed{3}", "level": "Level 4", "type": "Algebra"},
+      {"problem": "Same  text", "solution": "\\boxed{4}", "level": "Level 4", "type": "Algebra"},
+      {"problem": "No box", "solution": "it is 7", "level": "Level 4", "type": "Algebra"}]
+pid = {r["problem"]: BP.problem_id(r["problem"]) for r in ds}
+check("problem id: NFKC and collapsed whitespace, as in the planning package",
+      pid["What is  1+1?\n"] == BP.problem_id("What is 1+1?") and pid["Find the ﬁrst x."] == BP.problem_id("Find the first x."))
+got = BP.build([(pid["Find the ﬁrst x."], 5), (pid["What is  1+1?\n"], 3)], ds)
+check("build: list order kept, raw text, gold from the last \\boxed",
+      [g["gold"] for g in got] == ["\\frac{1}{2}", "2"] and got[1]["problem"] == "What is  1+1?\n" and got[0]["subject"] == "Geometry")
+for name, ids in (("an id not in the dataset", [("mathsha256:" + "0" * 64, 3)]), ("a level mismatch", [(pid["What is  1+1?\n"], 5)]),
+                  ("two rows with one text and different golds", [(pid["Same text"], 4)]), ("no \\boxed in the solution", [(pid["No box"], 4)]),
+                  ("a duplicate id", [(pid["What is  1+1?\n"], 3)] * 2)):
+    try:
+        BP.build(ids, ds)
+        check(f"build: {name} is refused", False)
+    except SystemExit:
+        check(f"build: {name} is refused", True)
+pd_dir = tempfile.mkdtemp()
+idcsv = os.path.join(pd_dir, "ids.csv")
+open(idcsv, "w").write("stage_order,problem_id,level\n2,%s,3\n1,%s,5\n" % (pid["What is  1+1?\n"], pid["Find the ﬁrst x."]))
+check("read_ids: sorted by stage_order", BP.read_ids(idcsv) == [(pid["Find the ﬁrst x."], 5), (pid["What is  1+1?\n"], 3)])
+sha1 = BP.write(got, os.path.join(pd_dir, "a.jsonl"))
+sha2 = BP.write(BP.build(BP.read_ids(idcsv), ds), os.path.join(pd_dir, "b.jsonl"))
+check("write: same rows give the same sha256", sha1 == sha2 == spec.file_sha(os.path.join(pd_dir, "a.jsonl")))
+check("gpu_prep reads the file", [p["problem_id"] for p in G.load_problems(os.path.join(pd_dir, "a.jsonl"))]
+      == [g["problem_id"] for g in got])
+argv_saved = sys.argv
+sys.argv = ["build_problems.py", "--ids", idcsv, "--out", os.path.join(pd_dir, "c.jsonl")]
+try:
+    BP.main()
+    check("main: an id list that is not the frozen one is refused", False)
+except SystemExit as e:
+    check("main: an id list that is not the frozen one is refused", "problem_ids_csv_sha256" in str(e))
+finally:
+    sys.argv = argv_saved
 
 print(f"\n{'all passed' if not fails else f'{len(fails)} FAILED: {fails}'}")
 sys.exit(1 if fails else 0)

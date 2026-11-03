@@ -26,7 +26,8 @@ modal volume create e0-confirm                      # "already exists" is fine
 modal volume put --force e0-confirm <frozen problems.jsonl> /inputs/problems.jsonl
 ```
 
-`problems.jsonl` has one JSON object per line with `problem_id`, `problem` and `gold`.
+`problems.jsonl` has one JSON object per line with `problem_id`, `problem` and `gold`, written by
+`src/confirm/build_problems.py`; its sha256 must equal `spec.SLOTS["problems_file_sha256"]`.
 
 ## Steps
 

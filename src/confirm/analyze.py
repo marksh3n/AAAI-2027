@@ -245,6 +245,9 @@ def populations(src, cuts):
 def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
     # primary: both token-matched comparators; secondary: Holm over spec.SECONDARY. s7_mixed: mixed problems
     # among live pre-answer cuts at S7's checkpoint; below spec.S7_MIN_MIXED, S7 is estimate-only (no p, not in Holm)
+    # verdict: superiority vs 0, both lower 95% bounds above 0 (intersection-union). rule-out, per comparator:
+    # a gain >= margin is excluded when the one-sided 95% limit (95th bootstrap percentile) is below the margin.
+    # this replaces the Tango score test, which needs one binary outcome per arm per problem
     out = {}
     pr = spec.PRIMARY
     for comp in ("random", f"aggregate{spec.AGG_EXTRA[0]}"):
@@ -253,7 +256,8 @@ def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
             out[f"primary vs {comp}"] = None
             continue
         est, lo, hi = summ(v)
-        out[f"primary vs {comp}"] = {"delta": est, "ci": [lo, hi], "p": wald_p(est, v[1:])}
+        out[f"primary vs {comp}"] = {"delta": est, "ci": [lo, hi], "p": wald_p(est, v[1:]),
+                                     "one_sided_95": float(np.nanpercentile(v[1:], 95))}
     ok = [out[k] for k in out if k.startswith("primary")]
     if margin is None:
         verdict = (f"not evaluated: team slots are {spec.SLOTS.get('status')}, not frozen"
@@ -261,7 +265,9 @@ def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
     elif any(o is None for o in ok):
         verdict = "not evaluable on this bundle"
     else:
-        verdict = "met" if all(o["ci"][0] > margin / 100 for o in ok) else "not met"
+        verdict = "met" if all(o["ci"][0] > 0 for o in ok) else "not met"
+        for o in ok:
+            o["rules_out_margin"] = o["one_sided_95"] < margin / 100
     out["primary verdict"] = verdict
     sec = []
     for s in spec.SECONDARY:
@@ -408,7 +414,12 @@ def report(meta, pops, pol, auc, res, dev, n_unbanked):
         o = res.get(k)
         L.append(f"- {k}: " + ("not evaluable on this bundle" if o is None else
                                 f"{pp(o['delta'])} pp [{pp(o['ci'][0])}, {pp(o['ci'][1])}]"))
-    L.append(f"- primary verdict (both lower bounds above the margin): **{res['primary verdict']}**")
+    L.append(f"- primary verdict (both lower 95% bounds above 0): **{res['primary verdict']}**")
+    for k in ("primary vs random", f"primary vs aggregate{spec.AGG_EXTRA[0]}"):
+        o = res.get(k)
+        if o is not None and "rules_out_margin" in o:
+            L.append(f"- {k}, gain >= {spec.SLOTS['margin_pp']:g} pp ruled out (one-sided 95% limit "
+                     f"{pp(o['one_sided_95'])} pp): **{'yes' if o['rules_out_margin'] else 'no'}**")
     for s in res["secondary"]:
         if s.get("delta") is None:
             L.append(f"- {s['id']}: not evaluable on this bundle")

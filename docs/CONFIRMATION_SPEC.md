@@ -12,7 +12,7 @@ bug to fix before any confirmation data exists.
 | `spec.slots_sha()`, team slots (status `pending_team_choice`) | `f1d63e60e7c9f366e32c9a9f6e01343b50acbdaf3b983ca901409ce578815a45` |
 
 **Status: draft.** Freezes once the team slots and the open decisions in §11 are settled; the primary
-test and the margin rule may still change, which changes `spec_sha()`.
+test (§11 row 4) may still change, which changes `spec_sha()`.
 
 **Pre-registration.** After the freeze and before any confirmation GPU step: push this file, `src/confirm/`
 and the monitors manifest, or send the mentor the commit hash and the hashes above. Nothing here changes once
@@ -135,8 +135,12 @@ equal to P's.
 - **Uncertainty**: problem-cluster bootstrap, B 2000, seed 0, draws shared by every arm at a cut
   (paired deltas), 95% percentile CIs.
 - **H1 (primary)**: at 4096, `lr_raw_L20`-triggered restart at frozen τ beats both token-matched random
-  restart and token-matched maj@3. Holds only if both lower 95% bounds exceed the margin [slot]
-  (intersection-union, no multiplicity adjustment). No verdict while slots are unfrozen.
+  restart and token-matched maj@3. Holds only if both lower 95% bounds exceed 0 (intersection-union, no
+  multiplicity adjustment). No verdict while slots are unfrozen.
+- **Rule-out**, per comparator, reported with H1: a gain ≥ margin [slot, 5 pp] is excluded when the
+  one-sided 95% limit (95th bootstrap percentile) is below it. Stands in for the planning protocol's Tango
+  score test, which needs one binary outcome per arm per problem; here outcomes are cluster means over
+  several sources, and replacements are bank means.
 - **Secondary**: Holm at α 0.05 over S1–S7; Wald p from the bootstrap SE.
 
   | ID | Cut | What | Compared with |
@@ -207,6 +211,12 @@ equal to P's.
   `frozen`.
 - **2026-10-27, renames.** Slot dict → `spec.SLOTS`, its hash → `slots_sha`, provenance flag →
   `--exports`. Values and all hashes unchanged.
+- **2026-11-02, win rule (§11 row 7).** H1 now needs both lower 95% bounds above 0, not above the 5 pp
+  margin; the margin becomes a rule-out bound reported per comparator. Seen before the choice: dev dry-run
+  primary +1.1 [−0.6, +3.1] vs random and +1.6 [−0.1, +3.4] vs maj@3, half-width ≈ 1.8 pp, so the old rule
+  needed an estimate ≳ 6.8 pp. No confirmation data exists. `spec_sha`, `monitor_sha`, `slots_sha` unchanged.
+- **2026-11-02, problems file (§11 row 8).** `build_problems.py` writes the jsonl `gpu_prep.py` reads from the
+  frozen id list; its sha256 goes into `SLOTS.problems_file_sha256` once run on Colab.
 
 ## 11. Open: planning protocol vs this spec
 
@@ -218,8 +228,8 @@ equal to P's.
 | 4 | Scope | probe-triggered intervention | same | make probe value beyond length (S6) confirmatory; dev S6 +0.6 pp [−2.0, +3.3]; changes `spec.PRIMARY`, team call |
 | 5 | Population | MATH L3–5, train and test | 367 MATH test problems | test only: 632 of 1000 planned are MATH train; pool has 3,301 eligible test problems |
 | 6 | Equal compute | equal caps, weighted token equivalents | realized tokens, rate matched per draw | keep realized tokens; report weighted totals as audit |
-| 7 | 5 pp margin | superiority vs 0 + Tango rule-out of ≥ 5 pp | both lower bounds above margin | adopt superiority vs 0 + rule-out; current rule unreachable; `analyze.py` change before freeze |
-| 8 | Problem file | id CSVs, no text | `gpu_prep.py` needs jsonl with problem and gold | build jsonl from the ids, put its sha in `problems_file_sha256` |
+| 7 | 5 pp margin | superiority vs 0 + Tango rule-out of ≥ 5 pp | superiority vs 0 + bootstrap rule-out (§7) | adopted 2026-11-02 (§10) |
+| 8 | Problem file | id CSVs, no text | `gpu_prep.py` needs jsonl with problem and gold | `build_problems.py` added 2026-11-02; sha pending a Colab run and row 5 |
 
 ## 12. Files
 
@@ -229,6 +239,7 @@ equal to P's.
 | `src/confirm/monitors.py`, `fit_monitors.py` | frozen monitors; fit, thresholds, manifest |
 | `src/confirm/provenance_6144.py` | where the dev 6144 numbers come from |
 | `src/confirm/policy.py`, `analyze.py` | arms, cost, token matching, tests, report |
+| `src/confirm/build_problems.py` | problems file (text + gold) from the frozen id list |
 | `src/confirm/gpu_prep.py`, `bundle.py`, `scripts/confirm_modal.py` | confirmation data run (`docs/RUN_CONFIRM_GPU.md`) |
 | `src/confirm/dev_bundle.py` | dev data in the same schema, for the dry run |
 | `src/confirm/power.py`, `discordance.py` | power of the planning design's tests; dev-implied q and effect |

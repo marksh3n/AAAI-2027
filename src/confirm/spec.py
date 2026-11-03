@@ -91,10 +91,10 @@ SLOTS = {
     "problem_ids_csv_sha256": "6609db7bea9205ab00d3c733edb1d4e6d415b5348001a0112e2f1e40fd050d86",
     # confirmation_after_pilot_1000.csv, original reservation positions 101-1100 (recommended disjoint set)
     "pilot_ids_csv_sha256": "aef5c628b0984a1a98615969af62726fd02bb7bad9edd44d53e9e9b30ae2644e",  # pilot_first_100.csv
-    "problems_file_sha256": None,  # the jsonl gpu_prep.py reads (prompt + gold per id); built from the id list, not yet
+    "problems_file_sha256": None,  # the jsonl gpu_prep.py reads (prompt + gold per id); build_problems.py, not yet run
     "n_problems": 1000,
     "samples_per_problem": None,  # planning design: 1 outcome per arm per problem; ours needs several (conflict 3)
-    "margin_pp": 5.0,  # planning: a useful gain, powered for and ruled out above; ours: a superiority margin (conflict 7)
+    "margin_pp": 5.0,  # a useful gain: ruled out when the one-sided 95% limit is below it; superiority is vs 0
     "endpoint": "paired final-answer accuracy, monitor vs aggregation, one outcome per arm per problem: exact "
                 "McNemar superiority (two-sided .05) and one-sided Tango score test ruling out a difference >= 5 pp",
     "expected_mixed_6144_stated": 0,  # one sample per problem has no within-problem pairs: S7 not evaluable
