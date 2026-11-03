@@ -9,7 +9,7 @@ bug to fix before any confirmation data exists.
 | `spec.spec_sha()`, frozen design | `f1e4f6ef4c510e738e04b8fd9937a8de17f1305351a51e04d8d8320d19d75df2` |
 | `spec.monitor_sha()`, monitor fit only | `22612aaffbf5fc8d26fda3a450363e2d9127062f1b40530d94a4db8b1d2a92a5` |
 | `monitors/manifest.json` sha256 (refit 2026-10-27; `.joblib` bytes identical to the 2026-10-25 fit, manifest `abcd7a2f…37f1`) | `344b7fa22399076799a71bc8b83cfef81d80eb01d4568091d95de065f35c5b83` |
-| `spec.slots_sha()`, team slots (status `pending_team_choice`) | `f1d63e60e7c9f366e32c9a9f6e01343b50acbdaf3b983ca901409ce578815a45` |
+| `spec.slots_sha()`, team slots (status `pending_team_choice`) | `c9cdcf5a4f65b8b8b8701880683bd4e99cf56c4d92a15191c6b0b83c43f0e9ab` |
 
 **Status: draft.** Freezes once the team slots and the open decisions in §11 are settled; the primary
 test (§11 row 4) may still change, which changes `spec_sha()`.
@@ -166,14 +166,31 @@ equal to P's.
 ## 8. Validity: resample check and sampler gap
 
 - Resample check per cut: replace every live trace (and separately the primary's flags) with a fresh
-  continuation of its own prefix. With one engine this is ≈ 0.
-- Dev was not: source accuracy 0.527 vs mean prefix r̂ 0.600 at 512 in the ceiling cohort; 5.1 and 3.0 pp
-  at 2048 and 4096. Dry-run check +4.4 pp [+1.3, +7.6] at 2048, +2.6 [−0.3, +5.5] at 4096.
+  continuation of its own prefix. If rollouts continue a prefix the way the source sampler did, this is ≈ 0.
 - If the check's CI at the decision cut excludes 0: primary reported with a flag, plus the pre-specified
   sensitivity `analyze.py --keep rollout` (kept live traces valued at their prefix's bank mean).
-- Ruled out on dev: mixed selection, length selection, BOS, grading, temperature. Open: main-block engine
-  version never recorded; dev rollouts fed retokenized text, not sampled ids; other run differences. The
-  frozen design removes each (one engine, exact ids, one BOS, 32768 − c budgets).
+
+**Sampler gap on dev.** Measured: continuations of a source prefix end correct more often than the source
+trace itself did. Ceiling cohort, source accuracy 0.527 vs mean prefix r̂ 0.600 at 512 (7.3 pp); 5.1 and
+3.0 pp at 2048 and 4096. Fresh t0 samples 0.593 vs source pass rate 0.540 on the same problems. Dry-run
+resample check +4.4 pp [+1.3, +7.6] at 2048, +2.6 [−0.3, +5.5] at 4096.
+- Same size in both dev blocks (512: 0.585 vs 0.658 main, 0.443 vs 0.515 pilot), so not the pilot's BOS
+  mismatch or its vLLM 0.28.0.
+- Not mixed selection: modelling it predicts source accuracy 0.566, observed 0.527.
+- Not length selection: length-matched resample control −2.3 / −2.5 pp at 512 / 2048 vs −3.1 / −2.3 raw.
+- Not grading: regrading reproduces 448/448 source labels and 400/400 rollouts.
+- Not temperature: 0.7 in sources and rollouts.
+- Not the larger rollout budget (32768 past the cut, not 32768 − c): 67 of 10,997 finished continuations
+  ran past the source's budget, 4 of them correct; too few to explain the gap.
+
+Open: the main block's engine version was never recorded; dev rollouts were fed retokenized prefix text,
+not the sampled ids; other run differences are unlogged. Cause unknown. Until it is explained, any gain
+that scores a replacement by rollouts against kept traces scored by their own outcome may carry the gap.
+
+**Why the confirmation run avoids it.** Sources and rollouts come from one engine and config, prefixes are
+fed as the exact sampled ids with one asserted BOS, and budgets are 32768 − c (§2). This removes every
+known dev difference; it does not show which one caused the gap. The resample check measures whether a gap
+remains, and the fallback above covers the case where it does.
 
 ## 9. Wording
 
@@ -206,7 +223,7 @@ equal to P's.
 - **2026-10-27, S7 estimate-only branch**, added before any S7 number under "stated" existed. Dry run
   under the frozen rule afterwards: S7 +0.090 [−0.029, +0.211], 61 mixed problems, estimate-only; primary
   contrasts unchanged.
-- **2026-10-27, team slots** filled from the planning package (`data/reports/Jaden_Accuracy_Planning_Handoff_q025.zip`),
+- **2026-10-27, team slots** filled from the accuracy planning package (zip sha256 `7aef6367…aa25`),
   status `pending_team_choice`. `analyze.py` gives no verdict and `gpu_prep.py t0` refuses to start until
   `frozen`.
 - **2026-10-27, renames.** Slot dict → `spec.SLOTS`, its hash → `slots_sha`, provenance flag →
@@ -217,6 +234,8 @@ equal to P's.
   needed an estimate ≳ 6.8 pp. No confirmation data exists. `spec_sha`, `monitor_sha`, `slots_sha` unchanged.
 - **2026-11-02, problems file (§11 row 8).** `build_problems.py` writes the jsonl `gpu_prep.py` reads from the
   frozen id list; its sha256 goes into `SLOTS.problems_file_sha256` once run on Colab.
+- **2026-11-02, slot source.** `SLOTS.source` names the planning package by its zip sha256, not its file name.
+  `slots_sha` f1d63e60… → c9cdcf5a…; `spec_sha`, `monitor_sha` unchanged.
 
 ## 11. Open: planning protocol vs this spec
 

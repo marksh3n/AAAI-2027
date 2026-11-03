@@ -82,12 +82,13 @@ K_PREFIX = 8  # continuations per live (trace, checkpoint)
 K_T0 = 8  # fresh samples per problem: restart replacements and the aggregation votes
 
 # ---- team slots: parameters, not decisions made here. filled 2026-10-27 from the planning package
-# (Jaden_Accuracy_Planning_Handoff_q025.zip, protocol status "awaiting_policy_and_freshness_check") and
+# (accuracy planning zip, q 0.25, protocol status "awaiting_policy_and_freshness_check") and
 # PENDING TEAM CHOICE: analyze.py gives no primary verdict and gpu_prep.py refuses to start until
 # "status" is "frozen". docs/CONFIRMATION_SPEC.md lists where the planning design and this spec conflict
 SLOTS = {
     "status": "pending_team_choice",
-    "source": "Jaden_Accuracy_Planning_Handoff_q025.zip, protocol/confirmation_protocol.json (2026-10-26)",
+    "source": "accuracy planning zip sha256 7aef6367060ef35c6f08745c8826350119d581c8eb89df52d0091e063496aa25, "
+              "protocol/confirmation_protocol.json (2026-10-26)",
     "problem_ids_csv_sha256": "6609db7bea9205ab00d3c733edb1d4e6d415b5348001a0112e2f1e40fd050d86",
     # confirmation_after_pilot_1000.csv, original reservation positions 101-1100 (recommended disjoint set)
     "pilot_ids_csv_sha256": "aef5c628b0984a1a98615969af62726fd02bb7bad9edd44d53e9e9b30ae2644e",  # pilot_first_100.csv
