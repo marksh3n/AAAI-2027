@@ -6,7 +6,7 @@ bug to fix before any confirmation data exists.
 
 | Hash | Value |
 |---|---|
-| `spec.spec_sha()`, frozen design | `f1e4f6ef4c510e738e04b8fd9937a8de17f1305351a51e04d8d8320d19d75df2` |
+| `spec.spec_sha()`, frozen design | `f653c2e774a37981ecd9fc17cdeafe8e5aa13894ab0cb6ff4196013d2a4e60ca` |
 | `spec.monitor_sha()`, monitor fit only | `22612aaffbf5fc8d26fda3a450363e2d9127062f1b40530d94a4db8b1d2a92a5` |
 | `monitors/manifest.json` sha256 (refit 2026-10-27; `.joblib` bytes identical to the 2026-10-25 fit, manifest `abcd7a2f…37f1`) | `344b7fa22399076799a71bc8b83cfef81d80eb01d4568091d95de065f35c5b83` |
 | `spec.slots_sha()`, team slots (status `pending_team_choice`) | `c9cdcf5a4f65b8b8b8701880683bd4e99cf56c4d92a15191c6b0b83c43f0e9ab` |
@@ -22,7 +22,7 @@ confirmation outcomes exist; any change goes in the decision log (§10) with dat
 
 | # | Question | Answered by |
 |---|---|---|
-| 1 | Do sampled continuations separate outcomes within problem better than cheap monitors? | AUROC table: r̂ vs each monitor, mixed problems, paired deltas; diagnostic, rollout cost stated (§5) |
+| 1 | How much of the within-problem outcome does the prefix already fix, and do cheap monitors or a short forward run capture it? | Q1 family T1–T3 (§7); AUROC table r̂ vs monitors, descriptive |
 | 2 | Does a cheap monitor become informative around 6144, before the answer, while intervention still helps? | S7, matched-cohort timing table, S4/S5 |
 | 3 | Does a monitor improve accuracy at equal total generated tokens? | H1 (§7) |
 
@@ -152,11 +152,30 @@ equal to P's.
   | S5 | 6144 | tree-triggered backtrack | random backtrack |
   | S6 | 4096 | primary's value over random | `len`'s value over random |
   | S7 | 6144 | tree AUROC on live pre-answer cuts ("stated") | `len` |
+  | S8 | – | timeout restart: a source still running at 8192 tokens is aborted and replaced by fresh t0-bank samples, ≤ 5 restarts, every token charged | best no-monitor baseline at equal tokens: upper envelope of plurality vote (own + m bank samples) and short-1@k (first of k to finish), mixtures included |
 
 - **S7 branch** (`S7_MIN_MIXED = 500`, pre-registered 2026-10-27): count mixed problems among live stated
   pre-answer cuts at 6144 (labels only, no scores). Below 500: S7 reported as estimate + CI, no claim,
   out of the Holm family (then S1–S6). Dev: 61 mixed problems, half-width ≈ ±0.13; 80% power for +0.065
   needs ≈ 9× the clusters.
+- **Question 1 family** (added 2026-11-02, §10). At each bank cut, population = live traces with a bank,
+  in problems with ≥ 2 of them.
+  - D = within-problem share of one continuation's outcome variance fixed by the prefix: split-half
+    covariance of r across a problem's traces over its (n − 1)-weighted Bernoulli variance; ratio of sums,
+    negatives kept. By the law of total variance, the ceiling for any prefix-only predictor of a rollout outcome
+  - capture(f) = Cov(f, r_a) Cov(f, r_b) / (Var f · Cov(r_a, r_b)), pooled within problem: share of D that f
+    explains with one global slope; r_a, r_b halves whose noise is independent of f
+  - forward monitor: of each prefix's 8 continuations, the first `FWD_K = 2` scored as correct, capped at
+    `FWD_CAP = 4096` tokens and uncapped; the other 6 split into the halves that score them
+  - at `Q1_CUT = 4096`, 95% percentile bounds, problem bootstrap: **T1** D lower bound > `D_MIN = 0.2`;
+    **T2** primary monitor's capture upper bound < `CAPTURE_MAX = 0.25`; **T3** cap retention (capped
+    capture / uncapped capture) lower bound > `RETAIN_MIN = 0.5`. Claim only if all three hold
+    (intersection-union); no verdict while slots are unfrozen
+  - not a test: uncapped forward runs vs a readout. Their capture is ≈ D / (D + (1 − D) / FWD_K) by
+    construction (a noisy copy of the quantity D is built from); reported next to that expected value
+  - descriptive: D and every monitor's capture at 2048 and 6144; forward-run token cost
+  - dev (exploratory, 44 / 43-problem halves of the 87, both reused across X1–X3): D 0.44 / 0.38, primary
+    capture 0.07 / 0.01, two runs capped 0.49 / 0.56 vs uncapped 0.55 / 0.61 (retention 0.90 / 0.93)
 - **Descriptive**: every AUROC (live, pre-answer, matched cohort), r̂ vs monitors, fixed arms,
   rollout-ranked diagnostic, m = 4, baseline-triggered policies.
 - **Dev dry run** (2026-10-25, 87 problems, 522 attempts, not evidence): primary vs random +1.1 pp
@@ -234,6 +253,18 @@ remains, and the fallback above covers the case where it does.
   needed an estimate ≳ 6.8 pp. No confirmation data exists. `spec_sha`, `monitor_sha`, `slots_sha` unchanged.
 - **2026-11-02, problems file (§11 row 8).** `build_problems.py` writes the jsonl `gpu_prep.py` reads from the
   frozen id list; its sha256 goes into `SLOTS.problems_file_sha256` once run on Colab.
+- **2026-11-02, question 1 family.** T1–T3 added after dev exploration (X1, X1b, X2 on the 87 dev
+  problems): D 0.44 / 0.38 at 4096 on two halves, primary capture 0.07 / 0.01, two capped forward runs
+  0.49 / 0.56. The dev holdout half was reused across analyses, so these are exploratory; the confirmation run
+  is the first independent test. Thresholds set from dev, below its estimates. Needs the full 8-continuation
+  bank at 4096. A first draft tested "forward runs beat the primary"; replaced the same day by cap retention,
+  since forward capture follows from D by construction and could not fail. `spec_sha` f1e4f6ef… →
+  1279f311…; `monitor_sha`, `slots_sha` unchanged.
+- **2026-11-02, S8 timeout restart.** Added from dev exploration X4 (source traces only, 367 problems,
+  184 / 183 split). First compared with the vote frontier only (+5.1 / +5.9 pp), then, same day, against the
+  best no-monitor baseline including short-1@k and mixtures, since voting is weak near 1.5 samples: +1.3
+  [−0.3, +3.1] / +2.3 [+0.5, +4.6] pp. Restart at 4096 is −1.1 / −0.6 pp against that baseline. Both halves
+  seen before the choice of T 8192, R 5. Needs no extra GPU (t0 bank). `spec_sha` 1279f311… → f653c2e7….
 - **2026-11-02, slot source.** `SLOTS.source` names the planning package by its zip sha256, not its file name.
   `slots_sha` f1d63e60… → c9cdcf5a…; `spec_sha`, `monitor_sha` unchanged.
 

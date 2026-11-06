@@ -70,9 +70,23 @@ def bank_table(samples):
     g = s.groupby(["problem_id", "trace_id", "checkpoint"])
     out = g.agg(k=("correct", "size"), r=("correct", "mean"), L=("n_gen", "mean")).reset_index()
     h = s.groupby(["problem_id", "trace_id", "checkpoint", "half"]).agg(r=("correct", "mean"), L=("n_gen", "mean")).unstack("half")
+    idx = pd.MultiIndex.from_frame(out[["problem_id", "trace_id", "checkpoint"]])
     for col in ("r", "L"):
         for k in (0, 1):
-            out[f"{col}_h{k}"] = h[(col, k)].reindex(pd.MultiIndex.from_frame(out[["problem_id", "trace_id", "checkpoint"]])).values
+            out[f"{col}_h{k}"] = h[(col, k)].reindex(idx).values
+    # question 1: the first FWD_K continuations form a short forward-run monitor (correct within FWD_CAP), the
+    # rest split into two alternating halves that estimate r without sharing its noise
+    s["pos"] = s.groupby(["problem_id", "trace_id", "checkpoint"]).cumcount()
+    s["fwd_ok"] = (s.correct.astype(bool) & (s.n_gen <= spec.FWD_CAP)).astype(float)
+    s["fwd_tok"] = np.minimum(s.n_gen, spec.FWD_CAP)
+    mon = s[s.pos < spec.FWD_K].groupby(["problem_id", "trace_id", "checkpoint"]).agg(
+        m_r=("fwd_ok", "mean"), m_r_all=("correct", "mean"), m_tok=("fwd_tok", "sum"), m_k=("fwd_ok", "size"))
+    rest = s[s.pos >= spec.FWD_K].copy()
+    rest["q"] = (rest.pos - spec.FWD_K) % 2
+    q = rest.groupby(["problem_id", "trace_id", "checkpoint", "q"]).correct.mean().unstack("q")
+    out = out.join(mon, on=["problem_id", "trace_id", "checkpoint"])
+    for k in (0, 1):
+        out[f"r_q{k}"] = q[k].reindex(idx).values if k in q else np.nan
     return out
 
 

@@ -125,3 +125,40 @@ def top_share(score, budget):
         w[idx] = take / len(idx)
         done += take
     return w
+
+
+def timeout_restart(n0, ok0, bank_n, bank_ok, T, R, orders):
+    # expected (accuracy, tokens) of one attempt: run the source (n0 tokens, outcome ok0); if it is still running
+    # at T, abort it (T tokens spent) and draw the next fresh bank sample in the order; at most R restarts, the
+    # last draw runs to its end. averaged over the given orders of the bank
+    acc = tok = 0.0
+    for o in orders:
+        seq = [(n0, ok0)] + [(bank_n[j], bank_ok[j]) for j in o]
+        spent, used = 0.0, 0
+        for pos, (n, ok) in enumerate(seq):
+            if n > T and used < R and pos < len(seq) - 1:
+                spent += T
+                used += 1
+                continue
+            acc += ok
+            tok += spent + n
+            break
+    return acc / len(orders), tok / len(orders)
+
+
+def short_first(n0, ok0, bank_n, bank_ok, k, orders, cap):
+    # short-1@k: the source and the next k - 1 bank samples run in parallel; all stop when the first one finishes
+    # (n < cap) and its answer is kept; tokens = k * that length. if none finishes, every token is spent and the
+    # attempt is wrong. averaged over the given orders of the bank
+    acc = tok = 0.0
+    for o in orders:
+        n = np.array([n0] + [bank_n[j] for j in o[: k - 1]], float)
+        ok = np.array([ok0] + [bank_ok[j] for j in o[: k - 1]], float)
+        fin = n < cap
+        if fin.any():
+            i = int(np.argmin(np.where(fin, n, np.inf)))
+            acc += ok[i]
+            tok += k * n[i]
+        else:
+            tok += n.sum()
+    return acc / len(orders), tok / len(orders)

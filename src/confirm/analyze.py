@@ -285,6 +285,14 @@ def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
             else:
                 sec.append({**s, "delta": None})
             continue
+        if s.get("kind") == "timeout":
+            v = vec.get(("timeout", s["T"], s["R"]))
+            if v is None or not np.isfinite(v).all():
+                sec.append({**s, "delta": None})
+                continue
+            est, lo, hi = summ(v)
+            sec.append({**s, "delta": est, "ci": [lo, hi], "p": wald_p(est, v[1:])})
+            continue
         if s["vs"] == "random":
             v = vec.get((s["checkpoint"], s["monitor"], s["action"], "random"))
         else:  # value over the token-matched random line, this monitor minus the baseline monitor
@@ -302,6 +310,158 @@ def tests(vec, auc_boot, auc_est, margin, s7_mixed=None):
             r["p_holm"] = float(h)
     out["secondary"] = sec
     return out
+
+
+def hull(x, y):
+    # upper concave envelope of the points (x, y), as sorted vertex arrays
+    pts = sorted(zip(x, y))
+    up = []
+    for p in pts:
+        while len(up) >= 2 and (up[-1][0] - up[-2][0]) * (p[1] - up[-2][1]) - (up[-1][1] - up[-2][1]) * (p[0] - up[-2][0]) >= 0:
+            up.pop()
+        up.append(p)
+    return np.array([u[0] for u in up]), np.array([u[1] for u in up])
+
+
+def timeout_vec(src, votes, draws, grid=((4096, 1), (8192, 1), (8192, 5), (12288, 5))):
+    # S8 and its descriptive grid: per attempt, timeout-restart accuracy and tokens, and the vote frontier (own
+    # answer + m bank samples, exact over m-subsets; tokens n + m * mean bank length). per draw, the policy minus
+    # the frontier interpolated at the policy's tokens (nan outside the frontier's range)
+    sums = P.Sums(src.problem_id.values, draws)
+    rng = np.random.default_rng(spec.BOOT_SEED)
+    bank = {p: d.sort_values("sample_idx") for p, d in votes.groupby("problem_id")}
+    orders = {p: [rng.permutation(len(d)) for _ in range(spec.TIMEOUT_ORDERS)] for p, d in bank.items()}
+    ms, ks = range(0, 5), range(2, 6)
+    fa = {m: np.zeros(len(src)) for m in ms}
+    ft = {m: np.zeros(len(src)) for m in ms}
+    sa = {k: np.zeros(len(src)) for k in ks}
+    st = {k: np.zeros(len(src)) for k in ks}
+    pol = {g: (np.zeros(len(src)), np.zeros(len(src))) for g in grid}
+    for i, r in enumerate(src.itertuples()):
+        b = bank[r.problem_id]
+        keys, bn, bok = list(b.answer_key), b.n_gen.values.astype(float), b.correct.values.astype(float)
+        for m in ms:
+            fa[m][i] = P.aggregate_acc(r.answer_key, keys, m) if m else float(r.correct)
+            ft[m][i] = r.n + m * bn.mean()
+        for k in ks:
+            sa[k][i], st[k][i] = P.short_first(float(r.n), float(r.correct), bn, bok, k, orders[r.problem_id], spec.MAX_NEW)
+        for T, R in grid:
+            pol[(T, R)][0][i], pol[(T, R)][1][i] = P.timeout_restart(float(r.n), float(r.correct), bn, bok, T, R,
+                                                                     orders[r.problem_id])
+    FA = np.stack([sums.mean(fa[m]) for m in ms], 1)
+    FT = np.stack([sums.mean(ft[m]) for m in ms], 1)
+    SA = np.stack([sums.mean(sa[k]) for k in ks], 1)
+    ST = np.stack([sums.mean(st[k]) for k in ks], 1)
+
+    def best(b, t):
+        # best no-monitor baseline at t tokens: the upper concave envelope of every vote and short-1@k point, since
+        # running one policy on a random share of attempts and another on the rest reaches any point between them
+        return np.interp(t, *hull(np.r_[FT[b], ST[b]], np.r_[FA[b], SA[b]]), left=np.nan, right=np.nan)
+
+    rows, vec = [], {}
+    for (T, R), (a, t) in pol.items():
+        A_, T_ = sums.mean(a), sums.mean(t)
+        d = np.array([A_[b] - best(b, T_[b]) for b in range(len(A_))])
+        vec[("timeout", T, R)] = d
+        lo, hi = S.ci(d[1:]) if np.isfinite(d[1:]).mean() > 0.9 else (np.nan, np.nan)
+        rows.append({"T": T, "R": R, "acc": A_[0], "tokens": T_[0], "vs_best_baseline": d[0], "lo": lo, "hi": hi})
+    rows += [{"T": "-", "R": f"vote m={m}", "acc": FA[0, m], "tokens": FT[0, m], "vs_best_baseline": np.nan,
+              "lo": np.nan, "hi": np.nan} for m in ms]
+    rows += [{"T": "-", "R": f"short-1@{k}", "acc": SA[0, i], "tokens": ST[0, i], "vs_best_baseline": np.nan,
+              "lo": np.nan, "hi": np.nan} for i, k in enumerate(ks)]
+    return rows, vec
+
+
+def wp_sums(g, x, y):
+    # per-problem within-problem sum of products of x and y (each centered on its problem's mean)
+    df = pd.DataFrame({"g": g, "x": np.asarray(x, float), "y": np.asarray(y, float)})
+    df[["x", "y"]] -= df.groupby("g")[["x", "y"]].transform("mean")
+    return (df.x * df.y).groupby(df.g).sum()
+
+
+def capture(g, pids, x, a, b, draws):
+    # share of the prefix-fixed variance x explains (one global slope): Cov(x, a) Cov(x, b) / (Var x Cov(a, b)),
+    # a and b two rollout halves of the same prefix with independent noise
+    sa, sb, sx, sab = (wp_sums(g, u, v).reindex(pids).fillna(0).values for u, v in ((x, a), (x, b), (x, x), (a, b)))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        est = sa.sum() * sb.sum() / (sx.sum() * sab.sum()) if sx.sum() > 0 else 0.0
+        boot = np.where(draws @ sx > 0, (draws @ sa) * (draws @ sb) / ((draws @ sx) * (draws @ sab)), 0.0)
+    return est, boot  # a score with no within-problem variation explains none of D
+
+
+def q1(cuts, bank, scores, n_boot=spec.N_BOOT, frozen=False, log=print):
+    # question 1 family (spec Q1_*). population at each bank checkpoint: live traces with a bank there, in
+    # problems with at least two such traces. D = within-problem share of one continuation's outcome variance
+    # fixed by the prefix: split-half covariance of r over the problem's (n - 1)-weighted Bernoulli variance,
+    # ratio of sums over problems, negatives kept
+    rows, est = [], {}
+    if not {"r_h0", "r_h1"} <= set(bank.columns):
+        return {"rows": rows, "verdict": "not evaluable on this bundle"}
+    for c in sorted(int(x) for x in set(bank.checkpoint) - {0}):
+        live = set(cuts[(cuts.checkpoint == c) & cuts.live.astype(bool)].trace_id)
+        b = bank[(bank.checkpoint == c) & bank.trace_id.isin(live) & (bank.k >= 2)].dropna(subset=["r_h0", "r_h1"])
+        b = b[b.groupby("problem_id").trace_id.transform("size") >= 2].reset_index(drop=True)
+        if b.empty:
+            continue
+        g = b.problem_id.values
+        fix = wp_sums(g, b.r_h0, b.r_h1)
+        pids = fix.index.values
+        agg = pd.DataFrame({"g": g, "n": b.k.astype(float), "h": b.r * b.k, "m": 1.0}).groupby("g").sum().loc[pids]
+        qp = agg.h / agg.n
+        tot = ((agg.m - 1) * qp * (1 - qp) * agg.n / (agg.n - 1)).values
+        draws = S.problem_draws(len(pids), n_boot, spec.BOOT_SEED)
+        D, Db = fix.loc[pids].values.sum() / tot.sum(), (draws @ fix.loc[pids].values) / (draws @ tot)
+        base = {"checkpoint": c, "traces": len(b), "problems": len(pids)}
+        rows.append({**base, "what": "D", "est": D, "lo": S.ci(Db)[0], "hi": S.ci(Db)[1]})
+        est[(c, "D")] = (D, Db)
+        sc = scores[scores.checkpoint == c].pivot_table(index="trace_id", columns="monitor", values="score")
+        for mon in sc.columns:
+            x = sc[mon].reindex(b.trace_id).values
+            if np.isnan(x).any():
+                continue
+            cap, capb = capture(g, pids, x, b.r_h0, b.r_h1, draws)
+            rows.append({**base, "what": f"capture {mon}", "est": cap, "lo": S.ci(capb)[0], "hi": S.ci(capb)[1]})
+            est[(c, mon)] = (cap, capb)
+        # forward runs vs the primary monitor, both scored on the halves the forward monitor does not use
+        if not {"m_r", "m_k", "r_q0", "r_q1"} <= set(b.columns) or spec.PRIMARY_MONITOR not in sc.columns:
+            continue
+        f = b[(b.m_k == spec.FWD_K)].dropna(subset=["r_q0", "r_q1"])
+        f = f[f.groupby("problem_id").trace_id.transform("size") >= 2].reset_index(drop=True)
+        if f.empty:
+            continue
+        gf = f.problem_id.values
+        pf = np.unique(gf)
+        df_ = S.problem_draws(len(pf), n_boot, spec.BOOT_SEED)
+        cf, cfb = capture(gf, pf, f.m_r.values, f.r_q0, f.r_q1, df_)
+        ca, cab = capture(gf, pf, f.m_r_all.values, f.r_q0, f.r_q1, df_)
+        cp, cpb = capture(gf, pf, sc[spec.PRIMARY_MONITOR].reindex(f.trace_id).values, f.r_q0, f.r_q1, df_)
+        fb = {"checkpoint": c, "traces": len(f), "problems": len(pf), "tokens": float(f.m_tok.mean())}
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ret, retb = cf / ca, cfb / cab
+        rows += [{**fb, "what": f"capture forward {spec.FWD_K} runs, cap {spec.FWD_CAP}", "est": cf,
+                  "lo": S.ci(cfb)[0], "hi": S.ci(cfb)[1]},
+                 {**fb, "what": f"capture forward {spec.FWD_K} runs, uncapped", "est": ca,
+                  "lo": S.ci(cab)[0], "hi": S.ci(cab)[1]},
+                 {**fb, "what": f"expected uncapped capture from D, D / (D + (1 - D) / {spec.FWD_K})",
+                  "est": D / (D + (1 - D) / spec.FWD_K), "lo": np.nan, "hi": np.nan},
+                 {**fb, "what": f"cap retention, capped / uncapped", "est": ret, "lo": S.ci(retb)[0], "hi": S.ci(retb)[1]},
+                 {**fb, "what": f"forward (capped) minus {spec.PRIMARY_MONITOR}, follows from D", "est": cf - cp,
+                  "lo": S.ci(cfb - cpb)[0], "hi": S.ci(cfb - cpb)[1]}]
+        est[(c, "retention")] = (ret, retb)
+    c = spec.Q1_CUT
+    have = all(k in est for k in ((c, "D"), (c, spec.PRIMARY_MONITOR), (c, "retention")))
+    tests = {}
+    if have:
+        tests = {"T1 D above D_MIN": S.ci(est[(c, "D")][1])[0] > spec.D_MIN,
+                 "T2 primary capture below CAPTURE_MAX": S.ci(est[(c, spec.PRIMARY_MONITOR)][1])[1] < spec.CAPTURE_MAX,
+                 "T3 cap retention above RETAIN_MIN": S.ci(est[(c, "retention")][1])[0] > spec.RETAIN_MIN}
+    if not have:
+        verdict = "not evaluable on this bundle"
+    elif not frozen:
+        verdict = f"not evaluated: team slots are {spec.SLOTS.get('status')}, not frozen"
+    else:
+        verdict = "met" if all(tests.values()) else "not met"
+    return {"rows": rows, "tests": tests, "verdict": verdict}
 
 
 def run(bundle, out, n_boot=spec.N_BOOT, log=print, keep="outcome"):
@@ -331,17 +491,24 @@ def run(bundle, out, n_boot=spec.N_BOOT, log=print, keep="outcome"):
             if label == "live, pre-answer":
                 auc_boot[(c, "pre_answer")] = b
                 auc_est[(c, "pre_answer")] = {x["score"]: x["auroc"] for x in r}
+    t_rows, t_vec = timeout_vec(src, votes, draws)
+    vec.update(t_vec)
     margin = spec.SLOTS["margin_pp"] if spec.SLOTS.get("status") == "frozen" else None
     s7c = next(s["checkpoint"] for s in spec.SECONDARY if s.get("kind") == "auroc_pre_answer")
     s7_mixed = pops.loc[pops.checkpoint == s7c, "mixed_pre_answer"]
     res = tests(vec, auc_boot, auc_est, margin, int(s7_mixed.iloc[0]) if len(s7_mixed) else None)
+    qr = q1(cuts, bank, scores, n_boot, frozen=spec.SLOTS.get("status") == "frozen", log=log)
+    res["q1"] = {"tests": qr["tests"], "verdict": qr["verdict"]}
     os.makedirs(out, exist_ok=True)
+    pd.DataFrame(qr["rows"]).to_csv(os.path.join(out, "q1.csv"), index=False)
+    pd.DataFrame(t_rows).to_csv(os.path.join(out, "timeout.csv"), index=False)
     pol = pd.DataFrame(pol_rows)
     pol.to_csv(os.path.join(out, "policies.csv"), index=False)
     pd.DataFrame(auc_rows).to_csv(os.path.join(out, "auroc.csv"), index=False)
     pops.to_csv(os.path.join(out, "populations.csv"), index=False)
     json.dump(res, open(os.path.join(out, "tests.json"), "w"), indent=1, default=float)
-    md = report(meta, pops, pol, pd.DataFrame(auc_rows), res, dev, len(unbanked))
+    md = report(meta, pops, pol, pd.DataFrame(auc_rows), res, dev, len(unbanked), pd.DataFrame(qr["rows"]),
+                pd.DataFrame(t_rows))
     open(os.path.join(out, "report.md"), "w").write(md)
     log("\n" + md)
     return pol, pd.DataFrame(auc_rows), res
@@ -358,7 +525,7 @@ def ci3(v, scale=100, fmt="{:+.1f}"):
     return f"{fmt.format(scale * e)} [{fmt.format(scale * lo)}, {fmt.format(scale * hi)}]"
 
 
-def report(meta, pops, pol, auc, res, dev, n_unbanked):
+def report(meta, pops, pol, auc, res, dev, n_unbanked, q1rows=None, trows=None):
     L = [f"# Confirmation analysis ({'DEVELOPMENT DRY RUN' if dev else 'confirmation data'})\n"]
     v = pol[pol.arm.str.startswith("resample validity check (every")] if len(pol) else pol
     for r in v.itertuples():
@@ -428,8 +595,33 @@ def report(meta, pops, pol, auc, res, dev, n_unbanked):
         f = (lambda x: f"{x:+.3f}") if unit == "" else pp
         tail = (f"estimate only: {s['mixed']} mixed problems < {spec.S7_MIN_MIXED}, no claim, not in the Holm family"
                 if s.get("estimate_only") else f"Holm p {s.get('p_holm', float('nan')):.3f}")
-        L.append(f"- {s['id']} ({s.get('kind', s.get('action'))} at {s['checkpoint']}, {s['monitor']} vs {s['vs']}): "
+        what = (f"timeout restart T {s['T']}, R {s['R']}, vs {s['vs']}" if s.get("kind") == "timeout" else
+                f"{s.get('kind', s.get('action'))} at {s['checkpoint']}, {s['monitor']} vs {s['vs']}")
+        L.append(f"- {s['id']} ({what}): "
                  f"{f(s['delta'])}{unit} [{f(s['ci'][0])}, {f(s['ci'][1])}], {tail}")
+    if trows is not None and len(trows):
+        L.append("\n## Timeout restart vs the best no-monitor baseline at equal tokens (S8 and grid)\n")
+        L.append("A source still running at T tokens is aborted and replaced by fresh t0-bank samples (at most R "
+                 "restarts); every token charged. Compared, at the same tokens per attempt, with the better of the vote "
+                 "frontier and the short-1@k frontier (first of k parallel samples to finish), mixtures included "
+                 "(upper concave envelope).\n")
+        L.append("| T | R | accuracy % | tokens / attempt | vs best baseline, pp [95% CI] |")
+        L.append("|---|---|---|---|---|")
+        for r in trows.itertuples():
+            L.append(f"| {r.T} | {r.R} | {100 * r.acc:.1f} | {r.tokens:,.0f} | "
+                     f"{pp(r.vs_best_baseline) if np.isfinite(r.vs_best_baseline) else '–'} "
+                     f"[{pp(r.lo) if np.isfinite(r.lo) else '–'}, {pp(r.hi) if np.isfinite(r.hi) else '–'}] |")
+    if q1rows is not None and len(q1rows):
+        L.append("\n## Question 1: how much the prefix fixes, and what captures it\n")
+        L.append("D = within-problem share of one continuation's outcome variance fixed by the prefix. capture = "
+                 "share of D a score explains (one global slope), scored on rollout halves the score does not use.\n")
+        L.append("| checkpoint | quantity | estimate [95% CI] | traces / problems |")
+        L.append("|---|---|---|---|")
+        for r in q1rows.itertuples():
+            L.append(f"| {r.checkpoint} | {r.what} | {r.est:.3f} [{r.lo:.3f}, {r.hi:.3f}] | {r.traces} / {r.problems} |")
+        for k, v in res["q1"]["tests"].items():
+            L.append(f"- {k}: {'yes' if v else 'no'}")
+        L.append(f"- question 1 verdict (T1, T2 and T3 all hold): **{res['q1']['verdict']}**")
     L.append("\nWording: report these as estimates on this cohort. A null here means the tested monitors have not "
              "shown intervention value at equal compute; it does not show that hidden states lack the information.\n")
     return "\n".join(L) + "\n"

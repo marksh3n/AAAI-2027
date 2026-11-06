@@ -67,7 +67,14 @@ SECONDARY = [
     {"id": "S6", "checkpoint": 4096, "action": "restart", "monitor": PRIMARY_MONITOR, "vs": "len"},
     {"id": "S7", "checkpoint": 6144, "kind": "auroc_pre_answer", "rule": PRE_ANSWER_PRIMARY, "monitor": TREE_MONITOR,
      "vs": "len"},
+    # added 2026-11-02 from dev exploration X4: a source still running at T tokens is aborted and replaced by fresh
+    # t0-bank samples (at most R restarts, the last runs out), every token charged; vs the better, at the same
+    # tokens per attempt, of the plurality-vote frontier (own answer + m bank samples, m = 0..4) and the
+    # short-1@k frontier (first of k parallel samples to finish, k = 2..5; arXiv 2505.17813), mixtures included
+    # (upper concave envelope of all baseline points)
+    {"id": "S8", "kind": "timeout", "T": 8192, "R": 5, "vs": "best of vote and short-1@k frontiers"},
 ]
+TIMEOUT_ORDERS = 200  # random draw orders of each problem's t0 bank, seeded BOOT_SEED
 # S7 fallback, pre-registered 2026-10-27: if the confirmation data has fewer than this many mixed problems
 # among live "stated" pre-answer cuts at 6144 (a label count, no scores), S7 is reported as effect + CI
 # only, makes no claim and leaves the Holm family. 500 is roughly what 80% power on the dev-sized effect
@@ -76,6 +83,21 @@ S7_MIN_MIXED = 500
 ALPHA = 0.05
 N_BOOT = 2000
 BOOT_SEED = 0
+
+# ---- question 1 family (added 2026-11-02, before any confirmation data): how much of the within-problem
+# rollout-outcome variance the prefix fixes (D), and how much of it a readout or a short forward run captures.
+# claim only if all three hold (intersection-union); each bound is a 95% percentile bootstrap bound at Q1_CUT
+#   T1  D lower bound > D_MIN
+#   T2  primary monitor's capture upper bound < CAPTURE_MAX
+#   T3  FWD_K forward runs capped at FWD_CAP keep a share of what the same runs capture uncapped: lower bound >
+#       RETAIN_MIN. (uncapped runs vs a readout is not a test: their capture is about D / (D + (1 - D) / FWD_K)
+#       by construction, so it is reported, not tested)
+Q1_CUT = 4096
+D_MIN = 0.2
+CAPTURE_MAX = 0.25
+FWD_K = 2
+FWD_CAP = 4096
+RETAIN_MIN = 0.5
 
 # ---- rollout bank (story-1 diagnostic and the replacement outcomes) ----
 K_PREFIX = 8  # continuations per live (trace, checkpoint)
@@ -109,7 +131,8 @@ def frozen():
             "TEMPERATURE", "TOP_P", "MAX_NEW", "BOS", "INSTRUCTION", "CHECKPOINTS", "DECISION", "BACKTRACK_TO",
             "LAYER", "THINK_END", "ANSWER_CUES", "ANSWER_CUE_WINDOW", "PRE_ANSWER_PRIMARY", "PRE_ANSWER_SENSITIVITY",
             "MONITORS", "PRIMARY_MONITOR", "TREE_MONITOR", "Q_DEV", "FIT_SEED", "ACTIONS", "AGG_EXTRA",
-            "PRIMARY", "SECONDARY", "S7_MIN_MIXED", "ALPHA", "N_BOOT", "BOOT_SEED", "K_PREFIX", "K_T0"]
+            "PRIMARY", "SECONDARY", "S7_MIN_MIXED", "ALPHA", "N_BOOT", "BOOT_SEED", "K_PREFIX", "K_T0",
+            "Q1_CUT", "D_MIN", "CAPTURE_MAX", "FWD_K", "FWD_CAP", "RETAIN_MIN", "TIMEOUT_ORDERS"]
     g = globals()
     return {k: g[k] for k in keys}
 

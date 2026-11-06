@@ -148,6 +148,9 @@ for sd in range(6):
 check("noise monitor vs token-matched random is unbiased (mean of 6 seeds within 1 pp)", abs(np.mean(deltas)) < 0.01,
       np.round(100 * np.array(deltas), 2))
 check("primary tests are filled", res["primary vs random"] is not None and res["primary vs aggregate2"] is not None)
+s8 = next(s_ for s_ in res["secondary"] if s_["id"] == "S8")
+check("S8 timeout restart is tested and Holm-adjusted", s8.get("delta") is not None and "p_holm" in s8, s8)
+check("report has the timeout table", "Timeout restart vs the best no-monitor baseline" in open(os.path.join(tmp, "out", "report.md")).read())
 check("no verdict while team slots are pending", res["primary verdict"].startswith("not evaluated"), res["primary verdict"])
 check("S7 pre-answer AUROC test computed", any(s["id"] == "S7" and s.get("delta") is not None for s in res["secondary"]))
 check("secondary family Holm-adjusted", all("p_holm" in s for s in res["secondary"]
@@ -253,6 +256,69 @@ samples = pd.DataFrame({"problem_id": [0] * 4, "trace_id": [""] * 4, "checkpoint
                         "correct": [1, 0, 1, 1], "n_gen": [10, 20, 30, 40]})
 bt = BL.bank_table(samples)
 check("bank halves alternate", bt.r_h0[0] == 1.0 and bt.r_h1[0] == 0.5 and bt.L_h0[0] == 20 and bt.r[0] == 0.75)
+check("bank: forward monitor from the first FWD_K (2), halves of the rest", bt.m_k[0] == 2 and bt.m_r[0] == 0.5
+      and bt.m_tok[0] == 30 and bt.r_q0[0] == 1.0 and bt.r_q1[0] == 1.0, bt.iloc[0].to_dict())
+
+# timeout restart: a source still running at T is aborted (T tokens) and replaced from the bank
+one = [np.array([0])]
+check("timeout: a long source is aborted and replaced", P.timeout_restart(10000, 0, np.array([1000.]), np.array([1.]), 8192, 1, one)
+      == (1.0, 8192 + 1000))
+check("timeout: a source that finishes before T is kept", P.timeout_restart(5000, 0, np.array([1000.]), np.array([1.]), 8192, 1, one)
+      == (0.0, 5000))
+check("timeout: the last allowed draw runs out", P.timeout_restart(10000, 0, np.array([9000., 1000.]), np.array([0., 1.]), 8192, 1,
+                                                                     [np.array([0, 1])]) == (0.0, 8192 + 9000))
+check("timeout: R restarts chain", P.timeout_restart(10000, 0, np.array([9000., 1000.]), np.array([0., 1.]), 8192, 2,
+                                                       [np.array([0, 1])]) == (1.0, 2 * 8192 + 1000))
+check("short-1@2: the first to finish wins, both stop there", P.short_first(9000, 0, np.array([3000.]), np.array([1.]), 2, one, 32768)
+      == (1.0, 2 * 3000))
+hx, hy = A.hull([0, 1, 2, 3], [0, 0.2, 0.9, 1.0])
+check("hull: points under a chord drop out", list(hx) == [0, 2, 3] and np.isclose(np.interp(1, hx, hy), 0.45))
+check("short-1@2: a truncated run never wins", P.short_first(32768, 0, np.array([32768.]), np.array([1.]), 2, one, 32768)
+      == (0.0, 2 * 32768))
+check("timeout: averaged over orders", P.timeout_restart(10000, 0, np.array([1000., 2000.]), np.array([1., 0.]), 8192, 1,
+                                                           [np.array([0, 1]), np.array([1, 0])]) == (0.5, 8192 + 1500))
+
+# question 1: D and captures recover simulated truth through bank_table and analyze.q1
+rq = np.random.default_rng(5)
+qs, qc, qsc, true_r, qg = [], [], [], [], []
+for p in range(300):
+    base = rq.uniform(.2, .8)
+    for i in range(6):
+        tid, rr = f"q{p}_{i}", float(np.clip(base + .25 * rq.normal(), .01, .99))
+        true_r.append(rr), qg.append(p)
+        for k in range(8):
+            ok = rq.random() < rr
+            qs.append({"problem_id": p, "trace_id": tid, "checkpoint": 4096, "sample_idx": k, "correct": int(ok),
+                       "n_gen": int(rq.integers(500, 3000))})
+        qc.append({"trace_id": tid, "checkpoint": 4096, "live": True})
+        qsc += [{"trace_id": tid, "checkpoint": 4096, "monitor": spec.PRIMARY_MONITOR, "score": rq.normal()},
+                {"trace_id": tid, "checkpoint": 4096, "monitor": "true_r", "score": rr}]
+qbank = BL.bank_table(pd.DataFrame(qs))
+tr_, g_ = np.array(true_r), np.array(qg)
+rc_ = tr_ - pd.Series(tr_).groupby(g_).transform("mean").values
+true_D = (rc_ ** 2).sum() / ((rc_ ** 2).sum() + (tr_ * (1 - tr_)).sum() * 5 / 6)
+qr = A.q1(pd.DataFrame(qc), qbank, pd.DataFrame(qsc), n_boot=200)
+qd = {r["what"]: r for r in qr["rows"]}
+check("q1: D recovers the simulated share", abs(qd["D"]["est"] - true_D) < 0.03, (round(qd["D"]["est"], 3), round(true_D, 3)))
+check("q1: the true r captures about all of D", abs(qd["capture true_r"]["est"] - 1) < 0.1, qd["capture true_r"]["est"])
+check("q1: a noise monitor captures about none", abs(qd[f"capture {spec.PRIMARY_MONITOR}"]["est"]) < 0.03)
+fw = qd[f"capture forward {spec.FWD_K} runs, cap {spec.FWD_CAP}"]
+check("q1: two forward runs capture part of D, bounded by their binomial noise", 0.2 < fw["est"] < 0.9, fw["est"])
+unc = qd[f"capture forward {spec.FWD_K} runs, uncapped"]["est"]
+exp_ = qd[f"expected uncapped capture from D, D / (D + (1 - D) / {spec.FWD_K})"]["est"]
+check("q1: uncapped forward capture sits near its value implied by D", abs(unc - exp_) < 0.1, (round(unc, 3), round(exp_, 3)))
+check("q1: every continuation ends inside the cap, so retention is about 1",
+      abs(qd["cap retention, capped / uncapped"]["est"] - 1) < 1e-9)
+slow = pd.DataFrame(qs)
+slow.loc[slow.correct == 1, "n_gen"] = 9000  # correct continuations all run past the cap
+qslow = {r["what"]: r for r in A.q1(pd.DataFrame(qc), BL.bank_table(slow), pd.DataFrame(qsc), n_boot=200)["rows"]}
+check("q1: correct answers past the cap drop retention to 0", abs(qslow["cap retention, capped / uncapped"]["est"]) < 1e-9)
+check("q1: no verdict while slots are pending", qr["verdict"].startswith("not evaluated") and len(qr["tests"]) == 3)
+qf = A.q1(pd.DataFrame(qc), qbank, pd.DataFrame(qsc), n_boot=200, frozen=True)
+check("q1: frozen verdict follows the three tests", qf["verdict"] == ("met" if all(qf["tests"].values()) else "not met"),
+      (qf["verdict"], qf["tests"]))
+check("q1: a bank without halves is not evaluable",
+      A.q1(pd.DataFrame(qc), qbank.drop(columns=["r_h0", "r_h1"]), pd.DataFrame(qsc))["verdict"] == "not evaluable on this bundle")
 
 # 6. fit_one on a synthetic probe_cmp store (positions 8 and 16 stand in for the real checkpoints)
 import fit_monitors as F  # noqa: E402
