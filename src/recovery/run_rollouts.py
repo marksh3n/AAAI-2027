@@ -18,10 +18,10 @@ LOG_SECONDS = 60
 ROW_FORMAT = 3
 SMOKE = {"limit": 2, "n": 2, "max_tokens_cap": 256}
 # all-in $/h per GPU; --rate-usd-hr overrides
-RATES = {"h100": 4.40, "h200": 4.99, "t4": 1.05}
+RATES = {"h100": 4.40, "h200": 4.99, "t4": 1.05, "l4": 1.00}
 # vLLM max_num_seqs per GPU: the H200 has ~4.6M tokens of KV cache for this model and sat
 # at 39% with 190 sequences in its benchmark; the H100 has about half that
-MAX_SEQS = {"h100": 256, "h200": 384, "t4": 64}
+MAX_SEQS = {"h100": 256, "h200": 384, "t4": 64, "l4": 64}
 MARGIN_USD = 2.0  # stop starting problems this far below the budget
 HARD_MARGIN_USD = 0.5  # drop in-flight work and exit this far below it
 STARTUP_S = 240  # container start and model load, billed before this process's clock
@@ -64,6 +64,8 @@ def add_args(parser):
     parser.add_argument("--save-token-ids", default="none", choices=["none", "sha", "full"],
                         help="per sample: nothing (ceiling run), sha256 of the generated ids, or the ids")
     parser.add_argument("--revision", default=None, help="model and tokenizer revision to pin (confirmation)")
+    parser.add_argument("--model", default=MODEL, help="HF repo; another model is a replication run")
+    parser.add_argument("--dtype", default="float16", help="vLLM dtype; bf16 models need bfloat16")
     return parser
 
 
@@ -157,7 +159,7 @@ def check_prompts(llm, make_params, recs):
     # proves prompt_token_ids are what vLLM feeds for the rendered string, BOS included. records with
     # bos == "one" (confirmation) are fed as ids, never as a string: there the check is that the
     # ids carry exactly one leading BOS and that vLLM echoes them unchanged
-    one = [r for r in recs if r.get("bos") == "one"]
+    one = [r for r in recs if r.get("bos") in ("one", "template")]
     if one:
         bos = llm.get_tokenizer().bos_token_id
         firsts = {}
@@ -166,10 +168,12 @@ def check_prompts(llm, make_params, recs):
         outs = llm.generate([{"prompt_token_ids": list(k)} for k in firsts],
                             make_params(n=1, temperature=0.0, max_tokens=1, seed=0))
         for (ids, r), o in zip(firsts.items(), outs):
-            if list(o.prompt_token_ids) != list(ids) or ids[0] != bos or ids[1] == bos:
-                raise StaleCache(f"{r['prefix_id']}: prompt ids are not one-BOS ids echoed unchanged by vLLM")
-        print(f"prompt check: {len(firsts)} one-BOS prompts echoed unchanged", flush=True)
-        recs = [r for r in recs if r.get("bos") != "one"]
+            strict = r["bos"] == "one" and (ids[0] != bos or ids[1] == bos)
+            double = bos is not None and list(ids[:2]) == [bos, bos]
+            if list(o.prompt_token_ids) != list(ids) or strict or double:
+                raise StaleCache(f"{r['prefix_id']}: prompt ids break BOS rule {r['bos']!r} or vLLM changed them")
+        print(f"prompt check: {len(firsts)} id prompts echoed unchanged", flush=True)
+        recs = [r for r in recs if r.get("bos") not in ("one", "template")]
         if not recs:
             return
     first = {}
@@ -472,11 +476,13 @@ def main():
     if args.n_override_file:
         overrides = {r["prefix_id"]: int(r["n"]) for r in read_jsonl(args.n_override_file)}
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    cfg = {"model": MODEL, "temp": args.temp, "top_p": args.top_p,
+    cfg = {"model": args.model, "temp": args.temp, "top_p": args.top_p,
            "max_tokens_cap": args.max_tokens_cap, "row_format": ROW_FORMAT}
     # only when set, so the ceiling run's config hash is unchanged
     if args.save_token_ids != "none":
         cfg["save_token_ids"] = args.save_token_ids
+    if args.dtype != "float16":
+        cfg["dtype"] = args.dtype
     if args.revision:
         # confirmation: sources and banks must match on all of this, so the engine goes in too
         cfg["revision"] = args.revision
@@ -502,7 +508,7 @@ def main():
                   + (min(r["max_tokens"], args.max_tokens_cap) if args.max_tokens_cap else r["max_tokens"])
                   for r, _ in work)
     pin = {"revision": args.revision, "tokenizer_revision": args.revision} if args.revision else {}
-    llm = LLM(model=MODEL, dtype="float16", max_model_len=max_len, seed=args.seed, **pin,
+    llm = LLM(model=args.model, dtype=args.dtype, max_model_len=max_len, seed=args.seed, **pin,
               enable_prefix_caching=True, enable_chunked_prefill=True,
               gpu_memory_utilization=args.gpu_mem, max_num_seqs=args.max_num_seqs,
               disable_log_stats=False)

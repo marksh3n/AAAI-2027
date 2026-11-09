@@ -38,6 +38,28 @@ ANSWER_CUE_WINDOW = 40
 PRE_ANSWER_PRIMARY = "stated"
 PRE_ANSWER_SENSITIVITY = ("strict", "think_boxed")
 
+# ---- model replication (added 2026-11-08): the env var E0_MODEL runs the same pipeline on another model.
+# unset (or "r1-1.5b") is the confirmation model above and leaves every hash unchanged. any other key is a
+# replication run, not the confirmation: no slot checks, cut at Q1_CUT only, its own Modal app and Volume.
+# key: (HF repo, revision, dtype, layer, hidden size, BOS rule). layer is about 20/28 of the depth;
+# "template": no BOS added beyond what the chat template writes, and never two
+PROFILES = {
+    "qwen3-1.7b": ("Qwen/Qwen3-1.7B", "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", "bfloat16", 20, 2048, "template"),
+    "qwen3-4b": ("Qwen/Qwen3-4B", "1cfa9a7208912126459214e8b04321603b3df60c", "bfloat16", 26, 2560, "template"),
+    "phi4-mini-reasoning": ("microsoft/Phi-4-mini-reasoning", "0e3b1e2d02ee478a3743abe3f629e9c0cb722e0a",
+                            "bfloat16", 23, 3072, "template"),
+    "r1-llama-8b": ("deepseek-ai/DeepSeek-R1-Distill-Llama-8B", "6a6f4aa4197940add57724a7707d069478df56b1",
+                    "bfloat16", 23, 4096, "one"),
+}
+MODEL_KEY = os.environ.get("E0_MODEL", "r1-1.5b")
+REPLICATION = MODEL_KEY != "r1-1.5b"
+HIDDEN = 1536
+if REPLICATION:
+    if MODEL_KEY not in PROFILES:
+        raise SystemExit(f"E0_MODEL={MODEL_KEY!r} is not one of r1-1.5b, {', '.join(PROFILES)}")
+    MODEL, MODEL_REVISION, DTYPE, LAYER, HIDDEN, BOS = PROFILES[MODEL_KEY]
+    TOKENIZER_REVISION = MODEL_REVISION
+
 # ---- monitors (fit on all development data by fit_monitors.py) ----
 # name -> (probe_cmp model, probe_cmp feature, layer or None, checkpoints)
 MONITORS = {

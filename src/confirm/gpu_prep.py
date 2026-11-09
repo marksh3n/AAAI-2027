@@ -34,9 +34,18 @@ def build_prompt(tok, problem):
 
 def prompt_ids(tok, problem):
     ids = tok(build_prompt(tok, problem), add_special_tokens=False)["input_ids"]
-    if ids[0] != tok.bos_token_id or ids[1] == tok.bos_token_id:
-        raise SystemExit(f"prompt does not start with exactly one BOS: {ids[:3]}")
+    if not bos_ok(tok, ids):
+        raise SystemExit(f"prompt breaks the BOS rule {spec.BOS!r}: {ids[:3]}")
     return ids
+
+
+def bos_ok(tok, ids):
+    # "one": exactly one leading BOS (the confirmation model). "template" (replication): whatever the chat
+    # template writes, but never two leading BOS
+    bos = tok.bos_token_id
+    if spec.BOS == "one":
+        return ids[0] == bos and ids[1] != bos
+    return bos is None or ids[:2] != [bos, bos]
 
 
 def read_rows(path):
@@ -62,11 +71,12 @@ def load_problems(path):
 def cmd_t0(a):
     sha = spec.file_sha(a.problems)
     want = spec.SLOTS["problems_file_sha256"]
-    if spec.SLOTS.get("status") != "frozen" and not a.smoke:
+    free = a.smoke or spec.REPLICATION  # a replication run is not the confirmation: no slot checks
+    if spec.SLOTS.get("status") != "frozen" and not free:
         raise SystemExit(f"team slots are {spec.SLOTS.get('status')}, not frozen")
-    if want is None and not a.smoke:
+    if want is None and not free:
         raise SystemExit("spec.SLOTS['problems_file_sha256'] is empty: the confirmation population is not frozen yet")
-    if want is not None and sha != want and not a.smoke:
+    if want is not None and sha != want and not free:
         raise SystemExit(f"{a.problems} has sha256 {sha}, the frozen list is {want}")
     probs = load_problems(a.problems)[: (2 if a.smoke else None)]
     tok = tokenizer()
@@ -78,7 +88,7 @@ def cmd_t0(a):
                 "trace_id": None, "checkpoint": "t0", "cut_token_idx": 0, "gold_answer": p["gold"],
                 "prompt_text": build_prompt(tok, p["problem"]), "prompt_token_ids": ids, "prefix_gen_token_ids": [],
                 "max_tokens": spec.MAX_NEW, "est_cont_tokens": a.est_tokens, "bos": spec.BOS,
-                "spec_sha256": spec.spec_sha(), "problems_sha256": sha}) + "\n")
+                "model": spec.MODEL, "spec_sha256": spec.spec_sha(), "problems_sha256": sha}) + "\n")
     print(f"wrote {len(probs)} t0 records to {a.out} (problems sha256 {sha[:16]}, spec {spec.spec_sha()[:16]})")
 
 
@@ -106,10 +116,21 @@ def sources_table(path, min_samples=None):
 
 def checkpoints(a):
     if a.checkpoints:
-        if not a.smoke:
+        if not (a.smoke or spec.REPLICATION):
             raise SystemExit("--checkpoints is for the smoke test only; the frozen ones are spec.CHECKPOINTS")
         return [int(c) for c in a.checkpoints.split(",")]
-    return list(spec.CHECKPOINTS)
+    return [spec.Q1_CUT] if spec.REPLICATION else list(spec.CHECKPOINTS)
+
+
+def replication_pool(src, cuts):
+    # replication bank, as the ceiling cohort: every untruncated source past the cut (live or not), in
+    # problems whose sources are mixed (some correct, some wrong), with at least 2 such cuts at that c
+    ok = src.set_index("trace_id")
+    acc = src.groupby("problem_id").correct.agg(["min", "max"])
+    mixed = set(acc.index[(acc["min"] == 0) & (acc["max"] == 1)])
+    pool = cuts[~ok.loc[cuts.trace_id, "truncated"].values & cuts.problem_id.isin(mixed)]
+    n = pool.groupby(["problem_id", "checkpoint"]).trace_id.transform("size")
+    return pool[n >= 2]
 
 
 def cut_table(src, tok, ckpts):
@@ -134,9 +155,10 @@ def cmd_cuts(a):
     # planning only (run_rollouts' budget gate): mean remaining length of the problem's sources past c
     est = {(p, c): int(np.mean([min(n, spec.MAX_NEW) - c for n in g.n if n > c]) or 1)
            for p, g in src.groupby("problem_id") for c in checkpoints(a) if (g.n > c).any()}
+    pool = replication_pool(src, cuts) if spec.REPLICATION and not a.smoke else cuts[cuts.live]
     n = 0
     with open(a.out, "w") as f:
-        for c in cuts[cuts.live].itertuples():
+        for c in pool.itertuples():
             t = src.set_index("trace_id").loc[c.trace_id]
             p = t0[c.problem_id]
             f.write(json.dumps({
@@ -146,7 +168,8 @@ def cmd_cuts(a):
                 "prefix_gen_token_ids": list(t.token_ids[: c.checkpoint]), "max_tokens": spec.MAX_NEW - c.checkpoint,
                 "est_cont_tokens": est[(c.problem_id, c.checkpoint)], "bos": spec.BOS, "spec_sha256": spec.spec_sha()}) + "\n")
             n += 1
-    print(f"{len(src)} sources, {len(cuts)} cuts past a checkpoint, {n} live -> {a.out}")
+    print(f"{len(src)} sources ({src.correct.mean():.3f} correct), {len(cuts)} cuts past a checkpoint, "
+          f"{n} to the bank ({'mixed-problem cohort' if spec.REPLICATION and not a.smoke else 'live'}) -> {a.out}")
     print(cuts.groupby("checkpoint").agg(cuts=("live", "size"), live=("live", "sum"), pre_answer=("pre_answer", "sum")).to_string())
 
 
@@ -164,7 +187,7 @@ def cmd_extract(a):
     ckpts = checkpoints(a)
     cuts = cut_table(src, tok, ckpts)
     os.makedirs(a.out, exist_ok=True)
-    acts = np.zeros((len(cuts), 1536), np.float16)
+    acts = np.zeros((len(cuts), spec.HIDDEN), np.float16)
     by_trace = cuts.groupby("trace_id").indices
     for k, (tid, rows) in enumerate(by_trace.items()):
         t = src.set_index("trace_id").loc[tid]
@@ -174,10 +197,12 @@ def cmd_extract(a):
         acts[rows] = h[:, 0, :]
         if k % 50 == 0:
             print(f"{k + 1}/{len(by_trace)} traces", flush=True)
+    if not np.isfinite(acts.astype(np.float32)).all():
+        raise SystemExit("non-finite states after the cast to float16")
     np.save(os.path.join(a.out, f"acts_L{spec.LAYER}.npy"), acts)
     cuts["row"] = np.arange(len(cuts))
     cuts.to_parquet(os.path.join(a.out, "feats.parquet"))
-    json.dump({"spec_sha256": spec.spec_sha(), "layer": spec.LAYER, "token_index": "c - 1",
+    json.dump({"spec_sha256": spec.spec_sha(), "model": spec.MODEL, "revision": spec.MODEL_REVISION, "layer": spec.LAYER, "token_index": "c - 1",
                "layer_convention": "hidden_states[l+1]", "dtype": spec.DTYPE, "checkpoints": ckpts,
                "rows": len(cuts), "sources_sha256": spec.file_sha(a.sources),
                "acts_sha256": spec.file_sha(os.path.join(a.out, f"acts_L{spec.LAYER}.npy")),
@@ -192,9 +217,7 @@ def cmd_check(a):
     src = sources_table(a.sources)
     t0 = {r["problem_id"]: r for r in map(json.loads, open(a.t0))}
     tok = tokenizer()
-    ok.append(("every prompt has exactly one leading BOS",
-               all(r["prompt_token_ids"][0] == tok.bos_token_id and r["prompt_token_ids"][1] != tok.bos_token_id
-                   for r in t0.values())))
+    ok.append((f"every prompt keeps the BOS rule {spec.BOS!r}", all(bos_ok(tok, r["prompt_token_ids"]) for r in t0.values())))
     ok.append(("token ids length == n_gen for every source", bool((src.token_ids.map(len) == src.n).all())))
     ok.append(("sources differ within a problem", bool(src.groupby("problem_id").text.nunique().min() > 1)))
     same = [tok.decode(i, skip_special_tokens=True) == x for i, x in zip(src.token_ids, src.text)]

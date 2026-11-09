@@ -1,5 +1,7 @@
 # Modal wrapper for the confirmation data run; usage and order in docs/RUN_CONFIRM_GPU.md. Same
-# pattern as modal_app.py, its own app and Volume ("e0-confirm"):
+# pattern as modal_app.py, its own app and Volume ("e0-confirm"). With E0_MODEL set (spec.PROFILES) it is
+# a replication run on that model instead: app and Volume "e0-<model>", cut at spec.Q1_CUT only, the bank
+# on the mixed-problem cohort only, no t0 bank, smoke on an L4 (bf16):
 #   /vol/inputs   problems.jsonl (the frozen problem list)
 #   /vol/outputs  t0.jsonl, sources.jsonl, feats/, cuts.jsonl, bank.jsonl (+ .config.json / ledgers)
 #   /vol/hf       HF_HOME
@@ -9,7 +11,7 @@ from pathlib import Path
 
 import modal
 
-NAME = "e0-confirm"
+NAME = f"e0-{spec.MODEL_KEY.replace('.', '-')}" if spec.REPLICATION else "e0-confirm"
 ROOT = Path(__file__).resolve().parent.parent
 VOL = "/vol"
 INP, OUT = f"{VOL}/inputs", f"{VOL}/outputs"
@@ -30,12 +32,14 @@ image = (
     # the pins are spec.VLLM_VERSION / spec.TRANSFORMERS_VERSION; pandas / pyarrow for feats.parquet
     .uv_pip_install(f"vllm=={spec.VLLM_VERSION}", f"transformers=={spec.TRANSFORMERS_VERSION}", "datasets",
                     "math-verify>=0.5", "pandas", "pyarrow", "scikit-learn", "joblib")
-    .env({"HF_HOME": f"{VOL}/hf", "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false"})
+    .env({"HF_HOME": f"{VOL}/hf", "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false",
+          "E0_MODEL": spec.MODEL_KEY})
     .add_local_dir(ROOT / "src", "/root/src", ignore=["**/__pycache__", "**/*.pyc"])
 )
 RUNNER = "/root/src/recovery/run_rollouts.py"
 PREP = "/root/src/confirm/gpu_prep.py"
-SAMPLING = ["--temp", str(spec.TEMPERATURE), "--top-p", str(spec.TOP_P), "--revision", spec.MODEL_REVISION]
+SAMPLING = ["--temp", str(spec.TEMPERATURE), "--top-p", str(spec.TOP_P), "--revision", spec.MODEL_REVISION,
+            "--model", spec.MODEL, "--dtype", spec.DTYPE]
 
 
 def _work(cmds):
@@ -82,12 +86,17 @@ def on_t4(cmds: list):
     _work(cmds)
 
 
+@app.function(gpu="L4", **common)
+def on_l4(cmds: list):
+    _work(cmds)
+
+
 @app.function(cpu=4, memory=16384, **common)
 def on_cpu(cmds: list):
     _work(cmds)
 
 
-GPU_FNS = {"h100": on_h100, "h200": on_h200, "t4": on_t4}
+GPU_FNS = {"h100": on_h100, "h200": on_h200, "t4": on_t4, "l4": on_l4}
 
 
 def runner(prefix_file, out, rnd, n, ids, gpu, budget, key, extra=()):
@@ -102,20 +111,24 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0):
     key = f"{step}-{gpu}-{time.strftime('%Y%m%d-%H%M%S')}"
     t0, src, cuts, bank, feats = (f"{OUT}/t0.jsonl", f"{OUT}/sources.jsonl", f"{OUT}/cuts.jsonl",
                                   f"{OUT}/bank.jsonl", f"{OUT}/feats")
+    print(f"[e0] model {spec.MODEL} @ {spec.MODEL_REVISION[:8]}, app/volume {NAME}"
+          + (" (replication)" if spec.REPLICATION else ""), flush=True)
     if step == "smoke":
-        # the whole chain, small, on a T4: 2 bundled problems, 2 sources each capped at 300 tokens,
-        # checkpoints 64 / 128, 2 continuations per prefix capped at 64; ends with gpu_prep check --recompute
+        # the whole chain, small, on a T4 (an L4 for bf16 models): 2 bundled problems, 2 sources each capped
+        # at 300 tokens, checkpoints 64 / 128, 2 continuations per prefix capped at 64; ends with gpu_prep
+        # check --recompute
         s = f"{OUT}/smoke"
         cap = ["--max-tokens-cap"]
-        on_t4.remote([
+        sg = "l4" if spec.DTYPE == "bfloat16" else "t4"
+        GPU_FNS[sg].remote([
             [PREP, "t0", "--problems", "/root/src/confirm/smoke_problems.jsonl", "--out", f"{s}/t0.jsonl", "--smoke"],
-            runner(f"{s}/t0.jsonl", f"{s}/sources.jsonl", 0, 2, "full", "t4", 0, key, cap + ["300"]),
+            runner(f"{s}/t0.jsonl", f"{s}/sources.jsonl", 0, 2, "full", sg, 0, key, cap + ["300"]),
             [PREP, "extract", "--sources", f"{s}/sources.jsonl", "--t0", f"{s}/t0.jsonl", "--out", f"{s}/feats",
              "--checkpoints", "64,128", "--smoke"],
             [PREP, "cuts", "--sources", f"{s}/sources.jsonl", "--t0", f"{s}/t0.jsonl", "--out", f"{s}/cuts.jsonl",
              "--checkpoints", "64,128", "--smoke"],
-            runner(f"{s}/t0.jsonl", f"{s}/bank.jsonl", 1, 2, "sha", "t4", 0, key, cap + ["64"]),
-            runner(f"{s}/cuts.jsonl", f"{s}/bank.jsonl", 0, 2, "sha", "t4", 0, key, cap + ["64"]),
+            runner(f"{s}/t0.jsonl", f"{s}/bank.jsonl", 1, 2, "sha", sg, 0, key, cap + ["64"]),
+            runner(f"{s}/cuts.jsonl", f"{s}/bank.jsonl", 0, 2, "sha", sg, 0, key, cap + ["64"]),
             [PREP, "check", "--sources", f"{s}/sources.jsonl", "--t0", f"{s}/t0.jsonl", "--feats", f"{s}/feats",
              "--bank", f"{s}/bank.jsonl", "--cuts", f"{s}/cuts.jsonl", "--smoke", "--recompute"],
         ])
@@ -136,9 +149,10 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0):
     elif step == "bank":
         if not budget:
             raise SystemExit("--budget is required (the Modal credit left, in $)")
-        # t0 bank first (round 1: round 0 of these records is the sources), then every live cut
-        GPU_FNS[gpu].remote([runner(t0, bank, 1, spec.K_T0, "sha", gpu, budget, key),
-                             runner(cuts, bank, 0, spec.K_PREFIX, "sha", gpu, budget, key)])
+        # t0 bank first (round 1: round 0 of these records is the sources), then every live cut.
+        # a replication run has no t0 bank: its cuts only
+        first = [] if spec.REPLICATION else [runner(t0, bank, 1, spec.K_T0, "sha", gpu, budget, key)]
+        GPU_FNS[gpu].remote(first + [runner(cuts, bank, 0, spec.K_PREFIX, "sha", gpu, budget, key)])
     elif step == "status":
         on_cpu.remote([[RUNNER, "--prefix-file", t0, "--out", src, "--status"],
                        [RUNNER, "--prefix-file", cuts, "--out", bank, "--status"]])
