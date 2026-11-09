@@ -11,7 +11,6 @@ from pathlib import Path
 
 import modal
 
-NAME = f"e0-{spec.MODEL_KEY.replace('.', '-')}" if spec.REPLICATION else "e0-confirm"
 ROOT = Path(__file__).resolve().parent.parent
 VOL = "/vol"
 INP, OUT = f"{VOL}/inputs", f"{VOL}/outputs"
@@ -24,6 +23,8 @@ for p in (ROOT / "src" / "confirm", Path("/root/src/confirm")):
         sys.path.insert(0, str(p))
         break
 import spec  # noqa: E402
+
+NAME = f"e0-{spec.MODEL_KEY.replace('.', '-')}" if spec.REPLICATION else "e0-confirm"
 
 app = modal.App(NAME)
 vol = modal.Volume.from_name(NAME, create_if_missing=True)

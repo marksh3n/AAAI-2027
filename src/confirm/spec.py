@@ -51,7 +51,7 @@ PROFILES = {
     "r1-llama-8b": ("deepseek-ai/DeepSeek-R1-Distill-Llama-8B", "6a6f4aa4197940add57724a7707d069478df56b1",
                     "bfloat16", 23, 4096, "one"),
 }
-MODEL_KEY = os.environ.get("E0_MODEL", "r1-1.5b")
+MODEL_KEY = os.environ.get("E0_MODEL") or "r1-1.5b"
 REPLICATION = MODEL_KEY != "r1-1.5b"
 HIDDEN = 1536
 if REPLICATION:
