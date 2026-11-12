@@ -6,7 +6,7 @@
 #   /vol/outputs  t0.jsonl, sources.jsonl, feats/, cuts.jsonl, bank.jsonl (+ .config.json / ledgers)
 #   /vol/hf       HF_HOME
 # every GPU step resumes: run_rollouts skips (prefix, round) rows already written.
-import os, subprocess, sys, threading, time
+import json, os, subprocess, sys, threading, time
 from pathlib import Path
 
 import modal
@@ -30,17 +30,20 @@ app = modal.App(NAME)
 vol = modal.Volume.from_name(NAME, create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    # the pins are spec.VLLM_VERSION / spec.TRANSFORMERS_VERSION; pandas / pyarrow for feats.parquet
+    # the pins are spec.VLLM_VERSION / spec.TRANSFORMERS_VERSION (per profile, spec.ENGINE); pandas / pyarrow
+    # for feats.parquet
     .uv_pip_install(f"vllm=={spec.VLLM_VERSION}", f"transformers=={spec.TRANSFORMERS_VERSION}", "datasets",
                     "math-verify>=0.5", "pandas", "pyarrow", "scikit-learn", "joblib")
     .env({"HF_HOME": f"{VOL}/hf", "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false",
-          "E0_MODEL": spec.MODEL_KEY})
+          "E0_MODEL": spec.MODEL_KEY, **spec.ENV})
     .add_local_dir(ROOT / "src", "/root/src", ignore=["**/__pycache__", "**/*.pyc"])
 )
 RUNNER = "/root/src/recovery/run_rollouts.py"
 PREP = "/root/src/confirm/gpu_prep.py"
 SAMPLING = ["--temp", str(spec.TEMPERATURE), "--top-p", str(spec.TOP_P), "--revision", spec.MODEL_REVISION,
-            "--model", spec.MODEL, "--dtype", spec.DTYPE]
+            "--model", spec.MODEL, "--dtype", spec.DTYPE, "--vllm-version", spec.VLLM_VERSION]
+if spec.VLLM_ARGS:
+    SAMPLING += ["--engine-args", json.dumps(spec.VLLM_ARGS, sort_keys=True)]
 
 
 def _work(cmds):
@@ -107,8 +110,9 @@ def runner(prefix_file, out, rnd, n, ids, gpu, budget, key, extra=()):
 
 
 @app.local_entrypoint()
-def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0):
-    """step: smoke | t0 | sources | extract | cuts | bank | status. samples: source traces per problem."""
+def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smoke_gpu: str = ""):
+    """step: smoke | t0 | sources | extract | cuts | bank | status. samples: source traces per problem.
+    smoke_gpu: run the smoke on this GPU instead of the T4 / L4 (e.g. h100 when no L4 is free)."""
     key = f"{step}-{gpu}-{time.strftime('%Y%m%d-%H%M%S')}"
     t0, src, cuts, bank, feats = (f"{OUT}/t0.jsonl", f"{OUT}/sources.jsonl", f"{OUT}/cuts.jsonl",
                                   f"{OUT}/bank.jsonl", f"{OUT}/feats")
@@ -120,7 +124,9 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0):
         # check --recompute
         s = f"{OUT}/smoke"
         cap = ["--max-tokens-cap"]
-        sg = "l4" if spec.DTYPE == "bfloat16" else "t4"
+        sg = smoke_gpu or ("l4" if spec.DTYPE == "bfloat16" else "t4")
+        if sg not in GPU_FNS:
+            raise SystemExit(f"--smoke-gpu must be one of {', '.join(GPU_FNS)}")
         GPU_FNS[sg].remote([
             [PREP, "t0", "--problems", "/root/src/confirm/smoke_problems.jsonl", "--out", f"{s}/t0.jsonl", "--smoke"],
             runner(f"{s}/t0.jsonl", f"{s}/sources.jsonl", 0, 2, "full", sg, 0, key, cap + ["300"]),

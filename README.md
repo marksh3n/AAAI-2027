@@ -84,6 +84,7 @@ python tests/test_oracle.py      # oracle-r_hat intervention bound: halves, ties
 python tests/test_reps.py        # representation test: window / last-token arithmetic, planted signal
 python tests/test_confirm.py     # confirmation design: monitors == probe_cmp fits, vote, costs, token matching
 python tests/test_confirm_pipeline.py  # fit_monitors -> dev_bundle -> analyze end to end on synthetic files
+python tests/test_replication.py # E0_MODEL profiles, Ministral prompt / [THINK] tags, level filter, bank plan
 ```
 
 `--verify` compares per-(row, layer) cosine rather than exact equality: fp16 and a

@@ -21,22 +21,85 @@ import bundle_lib as B  # noqa: E402
 
 
 def tokenizer():
+    if spec.VLLM_ARGS.get("tokenizer_mode") == "mistral":
+        return MistralTok()
     from transformers import AutoTokenizer
     return AutoTokenizer.from_pretrained(spec.MODEL, revision=spec.TOKENIZER_REVISION)
 
 
+class MistralTok:
+    # Mistral profiles: mistral-common's own tokenizer, the one vLLM generates with in mistral mode.
+    # transformers 5 hands these repos to MistralCommonBackend, whose chat template drops the default system
+    # prompt and whose text round trip is unsafe, so prompt ids come straight from encode_chat_completion,
+    # with SYSTEM_PROMPT.txt as the system message split into text + thinking + text (as the model card sends it)
+    def __init__(self):
+        from huggingface_hub import hf_hub_download
+        from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+        get = lambda f: hf_hub_download(spec.MODEL, f, revision=spec.TOKENIZER_REVISION)
+        self.mt = MistralTokenizer.from_file(get("tekken.json"))
+        self.raw = self.mt.instruct_tokenizer.tokenizer
+        self.bos_token_id = self.raw.bos_id
+        self.system = open(get("SYSTEM_PROMPT.txt")).read()
+
+    def prompt_ids(self, problem):
+        from mistral_common.protocol.instruct.chunk import TextChunk, ThinkChunk
+        from mistral_common.protocol.instruct.messages import SystemMessage, UserMessage
+        from mistral_common.protocol.instruct.request import ChatCompletionRequest
+        sp = self.system
+        i, j = sp.find("[THINK]"), sp.find("[/THINK]")
+        if not 0 <= i < j:
+            raise SystemExit("SYSTEM_PROMPT.txt has no [THINK]...[/THINK] block")
+        system = SystemMessage(content=[TextChunk(text=sp[:i]), ThinkChunk(thinking=sp[i + 7:j], closed=True),
+                                        TextChunk(text=sp[j + 8:])])
+        req = ChatCompletionRequest(messages=[system, UserMessage(content=problem + spec.INSTRUCTION)])
+        return [int(x) for x in self.mt.encode_chat_completion(req).tokens]
+
+    def decode(self, ids, skip_special_tokens=False):
+        # skip_special_tokens=False: every control token kept ([THINK] stays visible for canon).
+        # skip_special_tokens=True: vLLM 0.32's own rule for sample text (MistralTokenizer.convert_ids_to_tokens):
+        # control tokens dropped except [THINK], [/THINK], [TOOL_CALLS] and [ARGS]
+        from mistral_common.tokens.tokenizers.base import SpecialTokenPolicy
+        ids = [int(x) for x in ids]
+        if skip_special_tokens:
+            keep = {self.raw.get_special_token(t) for t in ("[THINK]", "[/THINK]", "[TOOL_CALLS]", "[ARGS]")
+                    if self.raw.is_special(t)}
+            ids = [i for i in ids if i in keep or not self.raw.is_special(i)]
+        return self.raw.decode(ids, special_token_policy=SpecialTokenPolicy.KEEP)
+
+
+def render(tok, problem):
+    # (prompt text, prompt ids). generate.build_prompt, inlined so this file does not import torch / datasets
+    # on the CPU steps; Mistral profiles encode with mistral-common and the text is the decoded ids
+    if isinstance(tok, MistralTok):
+        ids = tok.prompt_ids(problem)
+        text = tok.decode(ids)
+    else:
+        text = tok.apply_chat_template([{"role": "user", "content": problem + spec.INSTRUCTION}],
+                                       tokenize=False, add_generation_prompt=True)
+        if spec.FORCE_THINK and isinstance(text, str) and not text.rstrip().endswith("<think>"):
+            text += "<think>\n"
+        ids = None
+    if not isinstance(text, str) or (spec.PROMPT_HAS and spec.PROMPT_HAS not in text):
+        raise SystemExit(f"prompt rendered as {str(text)[:120]!r}, which lacks {spec.PROMPT_HAS!r}")
+    if ids is None:
+        ids = tok(text, add_special_tokens=False)["input_ids"]
+    if not bos_ok(tok, ids):
+        raise SystemExit(f"prompt breaks the BOS rule {spec.BOS!r}: {ids[:3]}")
+    return text, ids
+
+
 def build_prompt(tok, problem):
-    # generate.build_prompt, inlined so this file does not import torch / datasets on the CPU steps
-    text = tok.apply_chat_template([{"role": "user", "content": problem + spec.INSTRUCTION}],
-                                   tokenize=False, add_generation_prompt=True)
-    return text if text.rstrip().endswith("<think>") else text + "<think>\n"
+    return render(tok, problem)[0]
 
 
 def prompt_ids(tok, problem):
-    ids = tok(build_prompt(tok, problem), add_special_tokens=False)["input_ids"]
-    if not bos_ok(tok, ids):
-        raise SystemExit(f"prompt breaks the BOS rule {spec.BOS!r}: {ids[:3]}")
-    return ids
+    return render(tok, problem)[1]
+
+
+def canon(text):
+    # the model's own think delimiters written as <think> / </think>; a no-op for the <think> models
+    a, b = spec.THINK_TAGS
+    return text.replace(b, "</think>").replace(a, "<think>")
 
 
 def bos_ok(tok, ids):
@@ -80,13 +143,16 @@ def cmd_t0(a):
         raise SystemExit(f"{a.problems} has sha256 {sha}, the frozen list is {want}")
     probs = load_problems(a.problems)[: (2 if a.smoke else None)]
     tok = tokenizer()
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as f:
-        for p in probs:
-            ids = prompt_ids(tok, p["problem"])
+        for k, p in enumerate(probs):
+            text, ids = render(tok, p["problem"])
+            if k == 0:
+                print(f"first prompt, {len(ids)} ids {ids[:4]}...: {text[:90]!r} ... {text[-90:]!r}", flush=True)
             f.write(json.dumps({
                 "prefix_id": f"t0/{p['problem_id']}", "source": "confirmation", "problem_id": p["problem_id"],
                 "trace_id": None, "checkpoint": "t0", "cut_token_idx": 0, "gold_answer": p["gold"],
-                "prompt_text": build_prompt(tok, p["problem"]), "prompt_token_ids": ids, "prefix_gen_token_ids": [],
+                "prompt_text": text, "prompt_token_ids": ids, "prefix_gen_token_ids": [],
                 "max_tokens": spec.MAX_NEW, "est_cont_tokens": a.est_tokens, "bos": spec.BOS,
                 "model": spec.MODEL, "spec_sha256": spec.spec_sha(), "problems_sha256": sha}) + "\n")
     print(f"wrote {len(probs)} t0 records to {a.out} (problems sha256 {sha[:16]}, spec {spec.spec_sha()[:16]})")
@@ -140,7 +206,7 @@ def cut_table(src, tok, ckpts):
         for c in ckpts:
             if t.n <= c:
                 continue
-            text = tok.decode(t.token_ids[:c])
+            text = canon(tok.decode(t.token_ids[:c]))
             rows.append({"trace_id": t.trace_id, "problem_id": t.problem_id, "checkpoint": c,
                          **B.cut_rules(text, t.answer, True), "prefix_text": text,
                          "prefix_sha": hashlib.sha256(json.dumps(list(t.token_ids[:c])).encode()).hexdigest()})
@@ -157,6 +223,7 @@ def cmd_cuts(a):
            for p, g in src.groupby("problem_id") for c in checkpoints(a) if (g.n > c).any()}
     pool = replication_pool(src, cuts) if spec.REPLICATION and not a.smoke else cuts[cuts.live]
     n = 0
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as f:
         for c in pool.itertuples():
             t = src.set_index("trace_id").loc[c.trace_id]
@@ -171,19 +238,53 @@ def cmd_cuts(a):
     print(f"{len(src)} sources ({src.correct.mean():.3f} correct), {len(cuts)} cuts past a checkpoint, "
           f"{n} to the bank ({'mixed-problem cohort' if spec.REPLICATION and not a.smoke else 'live'}) -> {a.out}")
     print(cuts.groupby("checkpoint").agg(cuts=("live", "size"), live=("live", "sum"), pre_answer=("pre_answer", "sum")).to_string())
+    print(bank_plan(src, pool, est, a.sources))
+
+
+def bank_plan(src, pool, est, sources_path):
+    # the bank's planned tokens (K_PREFIX continuations per cut, each the problem's mean remaining source length
+    # past the cut) priced at what the sources cost per token, from their ledger
+    tok = sum(spec.K_PREFIX * est[(c.problem_id, c.checkpoint)] for c in pool.itertuples())
+    line = (f"bank plan: {len(pool)} cuts in {pool.problem_id.nunique()} problems x {spec.K_PREFIX} = "
+            f"~{tok / 1e6:.1f}M tokens")
+    ledger = f"{sources_path}.ledger.json"
+    if os.path.exists(ledger):
+        usd = sum(r["usd"] for runs in json.load(open(ledger)).values() for r in runs)
+        per_m = usd / (src.n.sum() / 1e6)
+        line += (f"; sources cost ${usd:.2f} for {src.n.sum() / 1e6:.1f}M tokens (${per_m:.2f}/M), "
+                 f"so the bank is ~${tok / 1e6 * per_m:.2f} at that rate")
+    return line
+
+
+def decoder():
+    # the text decoder without its lm head, on the GPU: model.model of a causal LM, or the language model
+    # inside an image-text checkpoint (Ministral 3)
+    import torch
+    import transformers as T
+    cls = T.AutoModelForImageTextToText if spec.MULTIMODAL else T.AutoModelForCausalLM
+    model = cls.from_pretrained(spec.MODEL, revision=spec.MODEL_REVISION, dtype=getattr(torch, spec.DTYPE))
+    dec = model.model
+    if spec.MULTIMODAL:
+        dec = getattr(dec, "language_model", None)
+        if dec is None:
+            raise SystemExit(f"no language_model in {type(model.model).__name__}: "
+                             f"{[n for n, _ in model.model.named_children()]}")
+    n = getattr(dec.config, "num_hidden_layers", None)
+    if n is not None and not spec.LAYER < n:
+        raise SystemExit(f"layer {spec.LAYER} but the decoder has {n} layers")
+    return dec.to("cuda").eval()
 
 
 def cmd_extract(a):
+    import types
     import torch
-    from transformers import AutoModelForCausalLM
     sys.path.insert(0, SRC)
     import extract as E  # chunked forward with a KV cache; E.LAYERS is read by activations()
     E.LAYERS = [spec.LAYER]
     src = sources_table(a.sources)
     t0 = {r["problem_id"]: r for r in map(json.loads, open(a.t0))}
     tok = tokenizer()
-    model = AutoModelForCausalLM.from_pretrained(spec.MODEL, revision=spec.MODEL_REVISION,
-                                                 torch_dtype=getattr(torch, spec.DTYPE)).to("cuda").eval()
+    model = types.SimpleNamespace(model=decoder())  # E.activations calls model.model
     ckpts = checkpoints(a)
     cuts = cut_table(src, tok, ckpts)
     os.makedirs(a.out, exist_ok=True)
@@ -220,22 +321,25 @@ def cmd_check(a):
     ok.append((f"every prompt keeps the BOS rule {spec.BOS!r}", all(bos_ok(tok, r["prompt_token_ids"]) for r in t0.values())))
     ok.append(("token ids length == n_gen for every source", bool((src.token_ids.map(len) == src.n).all())))
     ok.append(("sources differ within a problem", bool(src.groupby("problem_id").text.nunique().min() > 1)))
-    same = [tok.decode(i, skip_special_tokens=True) == x for i, x in zip(src.token_ids, src.text)]
+    dec = [tok.decode(i, skip_special_tokens=True) for i in src.token_ids]
+    same = [d == x for d, x in zip(dec, src.text)]
     ok.append((f"source text == decode(ids) ({sum(same)}/{len(same)})", all(same)))
+    for d, x in [(d, x) for d, x in zip(dec, src.text) if d != x][:1]:
+        k = next((i for i, (u, v) in enumerate(zip(d, x)) if u != v), min(len(d), len(x)))
+        print(f"     first mismatch at char {k} (lengths {len(d)} / {len(x)}): decode {d[max(k - 30, 0):k + 30]!r} "
+              f"vs vLLM {x[max(k - 30, 0):k + 30]!r}")
     if a.feats:
         f = pd.read_parquet(os.path.join(a.feats, "feats.parquet"))
         acts = np.load(os.path.join(a.feats, f"acts_L{spec.LAYER}.npy"))
         ok.append(("one state per feats row, finite", acts.shape[0] == len(f) and np.isfinite(acts.astype(np.float32)).all()))
         if a.recompute:
             import torch
-            from transformers import AutoModelForCausalLM
-            model = AutoModelForCausalLM.from_pretrained(spec.MODEL, revision=spec.MODEL_REVISION,
-                                                         torch_dtype=getattr(torch, spec.DTYPE)).to("cuda").eval()
+            dec = decoder()
             r = f.iloc[0]
             t = src.set_index("trace_id").loc[r.trace_id]
             ids = t0[t.problem_id]["prompt_token_ids"] + list(t.token_ids[: r.checkpoint])
             with torch.no_grad():
-                h = model.model(torch.tensor([ids], device="cuda"), output_hidden_states=True).hidden_states[spec.LAYER + 1][0, -1]
+                h = dec(torch.tensor([ids], device="cuda"), output_hidden_states=True).hidden_states[spec.LAYER + 1][0, -1]
             a1, a2 = h.float().cpu().numpy(), acts[int(r.row)].astype(np.float32)
             cos = float(a1 @ a2 / np.linalg.norm(a1) / np.linalg.norm(a2))
             ok.append((f"stored state == one full forward at c - 1 (cos {cos:.5f})", cos > 0.999))

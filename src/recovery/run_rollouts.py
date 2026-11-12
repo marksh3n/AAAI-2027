@@ -66,6 +66,9 @@ def add_args(parser):
     parser.add_argument("--revision", default=None, help="model and tokenizer revision to pin (confirmation)")
     parser.add_argument("--model", default=MODEL, help="HF repo; another model is a replication run")
     parser.add_argument("--dtype", default="float16", help="vLLM dtype; bf16 models need bfloat16")
+    parser.add_argument("--vllm-version", default=VLLM_VERSION, help="the vLLM the run must use")
+    parser.add_argument("--engine-args", default="",
+                        help="JSON of extra vllm.LLM keyword arguments (e.g. the Mistral formats); part of the config")
     return parser
 
 
@@ -272,6 +275,22 @@ class Live:
         return 0
 
 
+def tail_seconds(max_tokens, rate, peak, max_num_seqs):
+    # the budget gate's worst case for a new problem: its longest sample runs to max_tokens at one sequence's
+    # share of the throughput. the share is rate / sequences running at once: the most vLLM has reported so
+    # far, else max_num_seqs. a long-trace model is KV-bound well below max_num_seqs (Ministral: 30-90 of
+    # 256), and dividing by 256 there overstated the tail about 3x and stopped its sources at $1.88 of $10
+    return max_tokens / (rate / max(peak or max_num_seqs, 1))
+
+
+def own_id(live, rid):
+    # our request id for an engine output. newer vLLM may add a suffix to the id it reports; ours end in
+    # "#<round>" and prefix ids hold no "#", so a key that starts the reported id is the only match
+    if rid in live:
+        return rid
+    return next((k for k in live if rid.startswith(k)), None)
+
+
 def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.time):
     # work: [(record, n)]. returns (stop reason or None, measured gen tok/s or None).
     # live_seqs counts unfinished samples, so the engine is refilled as soon as any sample
@@ -284,6 +303,8 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
     start = last_t = clock()
     last_gen = 0
     n_prefixes, n_done = len(work), 0
+
+    peak = [0]  # most sequences vLLM has run at once so far (its own metric); 0 until the first log line
 
     def tok_s(now):
         return gen / (now - start) if now - start >= PLAN_WARMUP_S and gen > 0 else None
@@ -299,8 +320,7 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
         committed = sum(max(x.est - sum(x.tokens.values()), 0) for x in live.values()) \
             + sum(est_tokens(r, n) for r, n in pending)
         new = sum(est_tokens(r, n) for r, n in unit)
-        per_seq = rate / max(live_seqs, args.max_num_seqs, 1)
-        tail_s = max(r["max_tokens"] for r, _ in unit) / per_seq
+        tail_s = tail_seconds(max(r["max_tokens"] for r, _ in unit), rate, peak[0], args.max_num_seqs)
         eta = budget.spent() + ((committed + new) / rate + tail_s) * budget.rate / 3600
         if eta >= budget.limit - MARGIN_USD:
             return (f"budget: ${budget.spent():.2f} spent + ${eta - budget.spent():.2f} to finish "
@@ -334,16 +354,22 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
             if not live:
                 break
 
-            for o in engine.step():
-                slot = live.get(o.request_id)
-                if slot is None:
+            outs = engine.step()
+            if not outs and not getattr(engine, "has_unfinished_requests", lambda: True)():
+                # the engine has nothing left but these never came back: fail instead of spinning
+                raise RuntimeError(f"vLLM is idle but {len(live)} prefixes got no final output "
+                                   f"(request ids such as {list(live)[:2]})")
+            for o in outs:
+                rid = own_id(live, o.request_id)
+                if rid is None:
                     continue
+                slot = live[rid]
                 for c in o.outputs:
                     gen += len(c.token_ids)
                     live_seqs -= slot.add(c)
                 if not o.finished:
                     continue
-                del live[o.request_id]
+                del live[rid]
                 rec, p = slot.rec, slot.params
                 live_seqs -= p.n - len(slot.finish)  # never leak a slot
                 pid = rec["prefix_id"]
@@ -382,6 +408,7 @@ def run(llm, make_params, work, args, out, cfg_hash, budget=None, clock=time.tim
                 hard = f"hard budget cap: ${budget.spent():.2f} spent of ${budget.limit:.2f}"
             if now - last_t >= LOG_SECONDS or hard or not live:
                 stats = engine_stats(llm)
+                peak[0] = max(peak[0], int(stats.get("num_requests_running", 0)))
                 window = (gen - last_gen) / (now - last_t) if now > last_t else 0.0
                 kv = stats.get("kv_cache_usage_perc", stats.get("gpu_cache_usage_perc", float("nan")))
                 money = ""
@@ -460,8 +487,8 @@ def main():
         raise SystemExit("--temp is required: the tag-B sampling temperature, 0.7")
     import vllm
     print(f"vllm {vllm.__version__}", flush=True)
-    if vllm.__version__ != VLLM_VERSION and not args.allow_version_mismatch:
-        raise SystemExit(f"tag-B used vllm {VLLM_VERSION}; pass --allow-version-mismatch to go on")
+    if vllm.__version__ != args.vllm_version and not args.allow_version_mismatch:
+        raise SystemExit(f"this run needs vllm {args.vllm_version}; pass --allow-version-mismatch to go on")
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import RequestOutputKind
 
@@ -483,6 +510,12 @@ def main():
         cfg["save_token_ids"] = args.save_token_ids
     if args.dtype != "float16":
         cfg["dtype"] = args.dtype
+    engine_args = json.loads(args.engine_args) if args.engine_args else {}
+    if engine_args:
+        cfg["engine_args"] = engine_args
+    if "VLLM_USE_FLASHINFER_SAMPLER" in os.environ:
+        # which top-p kernel draws the samples; only recorded when set, so older config hashes are unchanged
+        cfg["flashinfer_sampler"] = os.environ["VLLM_USE_FLASHINFER_SAMPLER"]
     if args.revision:
         # confirmation: sources and banks must match on all of this, so the engine goes in too
         cfg["revision"] = args.revision
@@ -511,7 +544,7 @@ def main():
     llm = LLM(model=args.model, dtype=args.dtype, max_model_len=max_len, seed=args.seed, **pin,
               enable_prefix_caching=True, enable_chunked_prefill=True,
               gpu_memory_utilization=args.gpu_mem, max_num_seqs=args.max_num_seqs,
-              disable_log_stats=False)
+              disable_log_stats=False, **engine_args)
     check_prompts(llm, SamplingParams, [r for r, _ in work])
     stop, tok_s = run(llm, make_params, work, args, args.out, cfg_hash, budget)
     budget.save()

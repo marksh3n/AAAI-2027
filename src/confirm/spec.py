@@ -50,7 +50,32 @@ PROFILES = {
                             "bfloat16", 23, 3072, "template"),
     "r1-llama-8b": ("deepseek-ai/DeepSeek-R1-Distill-Llama-8B", "6a6f4aa4197940add57724a7707d069478df56b1",
                     "bfloat16", 23, 4096, "one"),
+    # model #3 (2026-11-11), level-5 problems only. 26 layers: 19 is about 20/28 of the depth
+    "ministral3-3b": ("mistralai/Ministral-3-3B-Reasoning-2512", "4a36357c811bf511a7b625d132e12f22408aac91",
+                      "bfloat16", 19, 3072, "one"),
 }
+# per-profile changes to the stack, prompt and think markers; a profile not listed keeps the defaults below.
+# Ministral 3 needs vLLM >= 0.12 and transformers 5 (text config "ministral3"); vLLM 0.32.0 pins transformers
+# >= 5.16.1, < 5.20. vLLM loads it the model card's way (Mistral tokenizer, config and consolidated weights),
+# which also applies its llama-4 attention scaling past 16384 tokens. the checkpoint is image-text, so
+# extraction reads the text decoder inside it. its chat template writes SYSTEM_PROMPT.txt as the system prompt
+# when none is given, and that prompt tells it to open [THINK]: no think tag is forced. [THINK] / [/THINK] are
+# rewritten to <think> / </think> in decoded prefixes, so THINK_END here and in e0-explore apply unchanged
+ENGINE = {
+    "ministral3-3b": {"vllm": "0.32.0", "transformers": "5.19.0",
+                      "vllm_args": {"tokenizer_mode": "mistral", "config_format": "mistral", "load_format": "mistral"},
+                      "think_tags": ("[THINK]", "[/THINK]"), "force_think": False, "multimodal": True,
+                      # FlashInfer's top-p sampler needs nvcc to JIT-compile; the image has none. off = vLLM's
+                      # PyTorch top-p sampler, the one vLLM 0.10.2 (no FlashInfer) used for DeepSeek and Qwen
+                      "env": {"VLLM_USE_FLASHINFER_SAMPLER": "0"},
+                      "prompt_has": "[SYSTEM_PROMPT]# HOW YOU SHOULD THINK AND ANSWER"},
+}
+VLLM_ARGS = {}  # extra vllm.LLM keyword arguments
+THINK_TAGS = ("<think>", "</think>")  # the model's own think delimiters
+FORCE_THINK = True  # append <think>\n to the prompt unless the template already ends with it
+MULTIMODAL = False  # hidden states from model.model.language_model, not model.model
+PROMPT_HAS = None  # a string the rendered prompt must contain (the system prompt)
+ENV = {}  # extra environment variables for the Modal image
 MODEL_KEY = os.environ.get("E0_MODEL") or "r1-1.5b"
 REPLICATION = MODEL_KEY != "r1-1.5b"
 HIDDEN = 1536
@@ -59,6 +84,15 @@ if REPLICATION:
         raise SystemExit(f"E0_MODEL={MODEL_KEY!r} is not one of r1-1.5b, {', '.join(PROFILES)}")
     MODEL, MODEL_REVISION, DTYPE, LAYER, HIDDEN, BOS = PROFILES[MODEL_KEY]
     TOKENIZER_REVISION = MODEL_REVISION
+    _e = ENGINE.get(MODEL_KEY, {})
+    VLLM_VERSION = _e.get("vllm", VLLM_VERSION)
+    TRANSFORMERS_VERSION = _e.get("transformers", TRANSFORMERS_VERSION)
+    VLLM_ARGS = _e.get("vllm_args", VLLM_ARGS)
+    THINK_TAGS = _e.get("think_tags", THINK_TAGS)
+    FORCE_THINK = _e.get("force_think", FORCE_THINK)
+    MULTIMODAL = _e.get("multimodal", MULTIMODAL)
+    PROMPT_HAS = _e.get("prompt_has", PROMPT_HAS)
+    ENV = _e.get("env", ENV)
 
 # ---- monitors (fit on all development data by fit_monitors.py) ----
 # name -> (probe_cmp model, probe_cmp feature, layer or None, checkpoints)
