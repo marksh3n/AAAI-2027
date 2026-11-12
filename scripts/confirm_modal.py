@@ -40,6 +40,7 @@ image = (
 )
 RUNNER = "/root/src/recovery/run_rollouts.py"
 PREP = "/root/src/confirm/gpu_prep.py"
+CONF = "/root/src/confirm/confidence.py"
 SAMPLING = ["--temp", str(spec.TEMPERATURE), "--top-p", str(spec.TOP_P), "--revision", spec.MODEL_REVISION,
             "--model", spec.MODEL, "--dtype", spec.DTYPE, "--vllm-version", spec.VLLM_VERSION]
 if spec.VLLM_ARGS:
@@ -111,7 +112,7 @@ def runner(prefix_file, out, rnd, n, ids, gpu, budget, key, extra=()):
 
 @app.local_entrypoint()
 def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smoke_gpu: str = ""):
-    """step: smoke | t0 | sources | extract | cuts | bank | status. samples: source traces per problem.
+    """step: smoke | t0 | sources | extract | cuts | bank | status | confidence. samples: source traces per problem.
     smoke_gpu: run the smoke on this GPU instead of the T4 / L4 (e.g. h100 when no L4 is free)."""
     key = f"{step}-{gpu}-{time.strftime('%Y%m%d-%H%M%S')}"
     t0, src, cuts, bank, feats = (f"{OUT}/t0.jsonl", f"{OUT}/sources.jsonl", f"{OUT}/cuts.jsonl",
@@ -160,6 +161,14 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
         # a replication run has no t0 bank: its cuts only
         first = [] if spec.REPLICATION else [runner(t0, bank, 1, spec.K_T0, "sha", gpu, budget, key)]
         GPU_FNS[gpu].remote(first + [runner(cuts, bank, 0, spec.K_PREFIX, "sha", gpu, budget, key)])
+    elif step == "confidence":
+        # per-token confidences of the bank's source prefixes (src/confirm/confidence.py) -> /outputs/confidence.
+        # replication models read their cuts file; the confirmation model (DeepSeek) re-tokenizes tag-B, from
+        # /inputs/traces_B.jsonl and /inputs/ds_cohort.jsonl (the ceiling cuts with their rollout prefix_sha)
+        out = f"{OUT}/confidence"
+        cmd = ([CONF, "cuts", "--cuts", cuts, "--out", out] if spec.REPLICATION else
+               [CONF, "ds", "--traces", f"{INP}/traces_B.jsonl", "--cohort", f"{INP}/ds_cohort.jsonl", "--out", out])
+        GPU_FNS[gpu].remote([cmd])
     elif step == "status":
         on_cpu.remote([[RUNNER, "--prefix-file", t0, "--out", src, "--status"],
                        [RUNNER, "--prefix-file", cuts, "--out", bank, "--status"]])
