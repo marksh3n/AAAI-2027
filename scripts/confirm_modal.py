@@ -96,12 +96,17 @@ def on_l4(cmds: list):
     _work(cmds)
 
 
+@app.function(gpu="A10G", **common)
+def on_a10g(cmds: list):
+    _work(cmds)
+
+
 @app.function(cpu=4, memory=16384, **common)
 def on_cpu(cmds: list):
     _work(cmds)
 
 
-GPU_FNS = {"h100": on_h100, "h200": on_h200, "t4": on_t4, "l4": on_l4}
+GPU_FNS = {"h100": on_h100, "h200": on_h200, "t4": on_t4, "l4": on_l4, "a10g": on_a10g}
 
 
 def runner(prefix_file, out, rnd, n, ids, gpu, budget, key, extra=()):

@@ -18,10 +18,10 @@ LOG_SECONDS = 60
 ROW_FORMAT = 3
 SMOKE = {"limit": 2, "n": 2, "max_tokens_cap": 256}
 # all-in $/h per GPU; --rate-usd-hr overrides
-RATES = {"h100": 4.40, "h200": 4.99, "t4": 1.05, "l4": 1.00}
+RATES = {"h100": 4.40, "h200": 4.99, "t4": 1.05, "l4": 1.00, "a10g": 1.10}
 # vLLM max_num_seqs per GPU: the H200 has ~4.6M tokens of KV cache for this model and sat
 # at 39% with 190 sequences in its benchmark; the H100 has about half that
-MAX_SEQS = {"h100": 256, "h200": 384, "t4": 64, "l4": 64}
+MAX_SEQS = {"h100": 256, "h200": 384, "t4": 64, "l4": 64, "a10g": 64}
 MARGIN_USD = 2.0  # stop starting problems this far below the budget
 HARD_MARGIN_USD = 0.5  # drop in-flight work and exit this far below it
 STARTUP_S = 240  # container start and model load, billed before this process's clock
