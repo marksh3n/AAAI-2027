@@ -138,15 +138,20 @@ def record(prefix_id, trace, problem, ckpt, cut, requested, p_ids, gen_ids, pass
     }
 
 
-def ceiling_population(traces, lens, min_len):
+def finished(t):
+    return not t["trunc"] and t["n_gen"] < MAX_NEW
+
+
+def ceiling_population(traces, lens, min_len, limit_hits=False):
     # probe_cmp's fixed population: untruncated traces whose retokenized length reaches
     # min_len, then problems with a correct and a wrong trace among them. every trace kept.
-    ok = [t for t in traces if not t["trunc"] and t["n_gen"] < MAX_NEW and lens[t["trace_id"]] >= min_len]
+    # limit_hits also keeps traces that never finished; they count as wrong.
+    ok = [t for t in traces if (limit_hits or finished(t)) and lens[t["trace_id"]] >= min_len]
     by_problem = defaultdict(list)
     for t in ok:
         by_problem[t["problem_id"]].append(t)
     return {pid: sorted(ts, key=lambda t: t["trace_id"]) for pid, ts in sorted(by_problem.items())
-            if len({t["is_correct"] for t in ts}) == 2}
+            if len({t["is_correct"] and finished(t) for t in ts}) == 2}
 
 
 def est_cont_tokens(all_traces, cut, cap):
@@ -182,10 +187,13 @@ def tier_order(units, target, seed):
 def build_ceiling(args, tokenizer, traces):
     lens, enc = {}, {}
     for t in traces:
-        if not t["trunc"] and t["n_gen"] < MAX_NEW:
+        if args.limit_hits or finished(t):
             enc[t["trace_id"]] = encode_trace(tokenizer, t["text"])[0]
         lens[t["trace_id"]] = len(enc[t["trace_id"]]) if t["trace_id"] in enc else 0
-    pop = ceiling_population(traces, lens, max(args.positions))
+    pop = ceiling_population(traces, lens, max(args.positions), args.limit_hits)
+    # --limit-hits writes only the cuts the default population lacks, and no t0 restarts
+    have = {t["trace_id"] for ts in ceiling_population(traces, lens, max(args.positions)).values()
+            for t in ts} if args.limit_hits else set()
     n_traces = sum(map(len, pop.values()))
     drift = [t["trace_id"] for ts in pop.values() for t in ts if not canonical(t, enc[t["trace_id"]])]
     print(f"population: {n_traces} traces over {len(pop)} mixed problems "
@@ -207,9 +215,13 @@ def build_ceiling(args, tokenizer, traces):
         everyone = by_problem[pid]
         pass_k, pass_n = sum(t["is_correct"] for t in everyone), len(everyone)
         recs = [record(f"ceil/{pid}/t0", None, problem, "t0", 0, 0, p_ids, [], pass_k, pass_n)]
+        if args.limit_hits:
+            recs = []
         for trace in ts:
+            if trace["trace_id"] in have:
+                continue
             ids = enc[trace["trace_id"]]
-            trace = dict(trace, _len=len(ids))
+            trace = dict(trace, _len=len(ids), is_correct=trace["is_correct"] and finished(trace))
             for pos in args.positions:
                 gen = ids[:pos]
                 # a cut inside a multi-byte character decodes to U+FFFD at the end
@@ -223,6 +235,8 @@ def build_ceiling(args, tokenizer, traces):
             r["max_tokens"] = args.max_continuation
             r["canonical"] = r["trace_id"] not in drift
             r["est_cont_tokens"] = est_cont_tokens(everyone, r["cut_token_idx"], args.max_continuation)
+        if not recs:
+            continue
         per_problem[pid] = recs
         units[pid] = (pass_k / pass_n, args.n * sum(r["est_cont_tokens"] for r in recs))
 
@@ -255,6 +269,9 @@ def main():
     parser.add_argument("--positions", type=int, nargs="+", default=list(CEILING_POSITIONS),
                         help="ceiling: exact token cuts; the population must reach the largest")
     parser.add_argument("--max-continuation", type=int, default=MAX_NEW, help="ceiling: max_tokens")
+    parser.add_argument("--limit-hits", action="store_true",
+                        help="ceiling: also cut traces that never finished (they count as wrong); "
+                             "writes only the cuts the default population lacks")
     parser.add_argument("--n", type=int, default=8, help="ceiling: samples per prefix, for estimates")
     parser.add_argument("--tier1-tokens", type=float, default=12.5e6, help="ceiling: tier 1 size")
     parser.add_argument("--data-dir", default=None, help="where traces_<tag>.jsonl lives")

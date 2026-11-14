@@ -194,7 +194,9 @@ def replication_pool(src, cuts):
     ok = src.set_index("trace_id")
     acc = src.groupby("problem_id").correct.agg(["min", "max"])
     mixed = set(acc.index[(acc["min"] == 0) & (acc["max"] == 1)])
-    pool = cuts[~ok.loc[cuts.trace_id, "truncated"].values & cuts.problem_id.isin(mixed)]
+    # E0_POOL_TRUNC=1 keeps sources that hit the token limit (they count as wrong): a superset of the default pool
+    keep = np.ones(len(cuts), bool) if os.environ.get("E0_POOL_TRUNC") == "1" else ~ok.loc[cuts.trace_id, "truncated"].values
+    pool = cuts[keep & cuts.problem_id.isin(mixed)]
     n = pool.groupby(["problem_id", "checkpoint"]).trace_id.transform("size")
     return pool[n >= 2]
 

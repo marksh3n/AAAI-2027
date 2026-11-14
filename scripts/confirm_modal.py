@@ -35,7 +35,7 @@ image = (
     .uv_pip_install(f"vllm=={spec.VLLM_VERSION}", f"transformers=={spec.TRANSFORMERS_VERSION}", "datasets",
                     "math-verify>=0.5", "pandas", "pyarrow", "scikit-learn", "joblib")
     .env({"HF_HOME": f"{VOL}/hf", "PYTHONUNBUFFERED": "1", "TOKENIZERS_PARALLELISM": "false",
-          "E0_MODEL": spec.MODEL_KEY, **spec.ENV})
+          "E0_MODEL": spec.MODEL_KEY, "E0_POOL_TRUNC": os.environ.get("E0_POOL_TRUNC", ""), **spec.ENV})
     .add_local_dir(ROOT / "src", "/root/src", ignore=["**/__pycache__", "**/*.pyc"])
 )
 RUNNER = "/root/src/recovery/run_rollouts.py"
