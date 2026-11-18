@@ -6,6 +6,8 @@
 import argparse, hashlib, json, os, sys, time
 import numpy as np
 import pandas as pd
+import scipy
+import sklearn
 from joblib import Parallel, delayed, parallel_config
 from sklearn.model_selection import StratifiedGroupKFold
 
@@ -25,11 +27,38 @@ HIDDEN_ARMS = [("lr", "raw"), ("lr", "svd50"), ("lr", "topk50"), ("hgb", "svd50"
                ("mlp", "svd50"), ("mlp", "topk50"), ("lr", "svd50+len")]
 SHARED_ARMS = [("lr", "len"), ("lr", "tfidf")]
 PERM_ARMS = [("lr", "svd50"), ("hgb", "svd50")]
-VERSION = 1  # bump when fitting changes; saved predictions from another version are refused
+VERSION = 2  # input/source/fold-bound cache; pre-v2 prediction caches are not reusable
 
 
 def sha(obj):
     return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def file_sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(8 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def population_sha(pop, ckpts):
+    # Labels and grouping affect folds and fitting even when trace membership is unchanged.
+    return sha({"trace_ids": pop.trace_id.tolist(), "problem_ids": pop.problem_id.tolist(),
+                "labels": pop.y.tolist(), "ckpts": ckpts})
+
+
+def input_fingerprint(store, data_dir):
+    files = {"traces": file_sha(os.path.join(data_dir, store.reg["traces"]))}
+    for name, (src, _) in sorted(store.sources.items()):
+        for field in ("meta", "acts"):
+            files[f"{name}/{field}"] = file_sha(os.path.join(data_dir, src[field]))
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = {name: file_sha(os.path.join(here, name)) for name in sorted(os.listdir(here))
+            if name.endswith(".py")}
+    return {"registry": store.reg, "files": files, "code": code,
+            "versions": {"python": sys.version, "numpy": np.__version__, "pandas": pd.__version__,
+                         "sklearn": sklearn.__version__, "scipy": scipy.__version__}}
 
 
 def make_folds(pop, seeds):
@@ -145,7 +174,7 @@ def main():
         sys.exit(f"only {n_prob} mixed problems survive the fixed population (< {a.min_problems}); "
                  "stopping rather than changing the design. see validate.py for candidate sets.")
 
-    pop_sha = sha({"trace_ids": pop.trace_id.tolist(), "ckpts": ckpts})
+    pop_sha = population_sha(pop, ckpts)
     pop_path = os.path.join(out, "population.json")
     exploratory = a.exploratory
     if os.path.exists(pop_path):
@@ -164,7 +193,8 @@ def main():
     folds = {s: fold_indices(pop, folds_by_seed[str(s)]) for s in seeds}
 
     cfg = {"version": VERSION, "population_sha": pop_sha, "seeds": seeds, "n_perm": n_perm,
-           "layers": layers, "cs": M.CS, "svd_k": M.SVD_K, "top_k": M.TOP_K, "perm_c": M.PERM_C}
+           "layers": layers, "cs": M.CS, "svd_k": M.SVD_K, "top_k": M.TOP_K, "perm_c": M.PERM_C,
+           "inputs": input_fingerprint(store, a.data), "folds": folds_by_seed}
     cfg_sha = sha(cfg)
     ids, y, groups = pop.trace_id.values, pop.y.values, pop.problem_id.values
     print(f"\nrun config {cfg_sha}: {len(seeds)} seed(s), {n_perm} permutations, layers {layers}, "
