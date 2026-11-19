@@ -13,8 +13,8 @@
 #         cut is checked three ways: n_gen == len(ids) + 1 (count), sha of (2-BOS prompt, ids[:cut]) == the
 #         rollout row's prefix_sha (the bank continued exactly these ids), and the nucleus test above. the prompt
 #         is scored with the BOS count the source was sampled with (tag-B lines < 480: one, else two)
-#   python src/confirm/confidence.py cuts --cuts cuts.jsonl --out <dir>
-#   python src/confirm/confidence.py ds --traces traces_B.jsonl --cohort ds_cohort.jsonl --out <dir>
+#   python src/replication/confidence.py cuts --cuts cuts.jsonl --out <dir>
+#   python src/replication/confidence.py ds --traces traces_B.jsonl --cohort ds_cohort.jsonl --out <dir>
 import argparse, json, os, sys
 import numpy as np
 import pandas as pd

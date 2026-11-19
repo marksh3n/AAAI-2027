@@ -7,7 +7,7 @@
 # cost per trace = expected sum of min(n_gen, L) over the K' continuations. target: the source trace's own
 # outcome. AUROCs pair-weighted within problem, problem-cluster bootstrap shared by all rows at a cut, so every
 # delta vs the full r_hat (K' 8, no cap) is paired. answers compared by normalized string (no math_verify here).
-#   python src/explore/cheap_rollouts.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> \
+#   python src/analysis/cheap_rollouts.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> \
 #       --split results/split.json --half explore --out <dir>
 import argparse, json, os, sys
 import numpy as np

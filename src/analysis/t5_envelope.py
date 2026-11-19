@@ -1,6 +1,6 @@
 # T5 "vs best no-monitor baseline": upper envelope of the maj@k and short-1@k frontiers at equal tokens, per bootstrap
 # draw; paired probe-minus-random interval; hindsight-oracle row (restart exactly the live traces that end wrong).
-#   python src/explore/t5_envelope.py <dir with x4_per_problem_*.csv> <traces_B.jsonl> <results/split_all.json> <out dir>
+#   python src/analysis/t5_envelope.py <dir with x4_per_problem_*.csv> <traces_B.jsonl> <results/split_all.json> <out dir>
 import json, os, sys
 import numpy as np, pandas as pd
 X4, TRACES, SPLIT, OUT = sys.argv[1:5]

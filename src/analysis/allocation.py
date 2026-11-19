@@ -8,7 +8,7 @@
 #   random(q)      restart once at 4096 a random share q of live traces (exact mixture of base and restart(4096, 1))
 # every policy is compared with the maj@k frontier at its own token cost: maj@k and maj@(k+1) mixed at the rate
 # that matches tokens (linear interpolation), inside each problem-bootstrap draw.
-#   python src/explore/allocation.py --traces <traces_B.jsonl> --meta <meta_B.parquet> --acts <acts_B.npy> \
+#   python src/analysis/allocation.py --traces <traces_B.jsonl> --meta <meta_B.parquet> --acts <acts_B.npy> \
 #       --split results/split_all.json --half explore --out <dir>
 import argparse, json, os, sys
 import numpy as np

@@ -2,7 +2,7 @@
 # a correct and a wrong source; Qwen3 and Ministral kept a problem if its six sources were mixed. this reruns X1 (D and
 # readout capture), forward (re-run capture) and X2 (re-run AUROC) on Qwen3 and Ministral restricted to the DeepSeek
 # rule ("pairs" problems), next to all cohort problems and the complement ("same": cohort traces all one outcome).
-#   python src/explore/consistent_rule.py <qwen outputs dir> <ministral outputs dir> <out dir>
+#   python src/analysis/consistent_rule.py <qwen outputs dir> <ministral outputs dir> <out dir>
 import json, os, re, sys
 import numpy as np
 import pandas as pd

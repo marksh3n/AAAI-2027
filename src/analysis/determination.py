@@ -13,7 +13,7 @@
 # predictors, all from the prefix only: len (log1p paragraphs), restarts, committed (</think> or \boxed),
 # probe_y (lr/raw L20 fit on source outcomes, grouped out-of-fold over all dev problems), probe_r (ridge on
 # L20 fit to within-problem-centered r_hat of OTHER cohort problems, so never scored against its own noise).
-#   python src/explore/determination.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> \
+#   python src/analysis/determination.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> \
 #       --meta <meta_B.parquet> --acts <acts_B.npy> --split results/split.json --half explore --out <dir>
 import argparse, json, os, sys
 import numpy as np

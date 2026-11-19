@@ -2,7 +2,7 @@
 # (MATH-500 levels 3-5), one row each, same problem_id as the dev traces so the models pair up. rows are in a
 # seeded shuffle, so a sources run stopped by its budget is still a random subset. --levels keeps only those
 # levels (Ministral, model #3: --levels 5, 134 problems)
-#   python3 src/confirm/dev_problems.py --traces data/hf/traces_B.jsonl --out data/problems_dev.jsonl
+#   python3 src/replication/dev_problems.py --traces data/hf/traces_B.jsonl --out data/problems_dev.jsonl
 import argparse, hashlib, json, random
 
 

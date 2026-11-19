@@ -6,7 +6,7 @@
 #            source outcome over all dev traces at the cut (grouped out of fold); a nonlinear probe (boosted trees
 #            on 50 principal components of L20) and a 4-layer ridge, both fit to within-problem-centered r_hat of
 #            other cohort problems
-#   python src/explore/robustness.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> --meta <meta_B.parquet> \
+#   python src/analysis/robustness.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> --meta <meta_B.parquet> \
 #       --acts <acts_B.npy> --out <dir>
 import argparse, json, os, sys
 import numpy as np

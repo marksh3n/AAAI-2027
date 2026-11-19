@@ -1,7 +1,7 @@
 # sampler gap under the cohort rule, three models. null: each source outcome is one Bernoulli(r_i) draw; a problem is
 # kept iff its cohort sources are mixed, so expected source accuracy of a kept problem is
 # (sum r - n prod r) / (n (1 - prod r - prod (1-r))). also a null simulation of D under the same rule.
-#   python src/explore/sampler_gap.py <deepseek rollouts> <traces_B.jsonl> <qwen outputs dir> <ministral outputs dir>
+#   python src/analysis/sampler_gap.py <deepseek rollouts> <traces_B.jsonl> <qwen outputs dir> <ministral outputs dir>
 import json, os, sys
 import numpy as np, pandas as pd
 DSB, DST, QO, MO = sys.argv[1:5]

@@ -2,7 +2,7 @@
 # the monitor (capped at L), samples 2-4 and 5-7 are the two halves that estimate the true r, so the monitor is
 # never scored against its own noise. monitors: share of the 2 that finish within L (gold-free, finish time)
 # and share correct within L (gold). capture as in determination.py.
-#   python src/explore/forward_capture.py --rollouts data/recovery_ceiling --split results/split.json \
+#   python src/analysis/forward_capture.py --rollouts data/recovery_ceiling --split results/split.json \
 #       --half explore --out <dir>
 import argparse, json, os, sys
 import numpy as np

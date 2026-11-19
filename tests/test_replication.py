@@ -4,7 +4,7 @@
 import json, os, subprocess, sys, tempfile, types
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-CONFIRM = os.path.join(ROOT, "src", "confirm")
+REPL = os.path.join(ROOT, "src", "replication")
 fails = []
 
 
@@ -18,7 +18,7 @@ def spec_under(key):
     # spec reads E0_MODEL at import, so each profile is loaded in its own interpreter
     code = ("import json, sys; sys.path.insert(0, %r); import spec as s; print(json.dumps({k: getattr(s, k) for k in "
             "('MODEL', 'LAYER', 'HIDDEN', 'BOS', 'VLLM_VERSION', 'TRANSFORMERS_VERSION', 'VLLM_ARGS', 'THINK_TAGS', "
-            "'FORCE_THINK', 'MULTIMODAL', 'PROMPT_HAS', 'THINK_END', 'ENV')} | {'sha': s.spec_sha()}))" % CONFIRM)
+            "'FORCE_THINK', 'MULTIMODAL', 'PROMPT_HAS', 'THINK_END', 'ENV')} | {'sha': s.spec_sha()}))" % REPL)
     env = {**os.environ, "E0_MODEL": key} if key else {k: v for k, v in os.environ.items() if k != "E0_MODEL"}
     return json.loads(subprocess.check_output([sys.executable, "-c", code], env=env))
 
@@ -42,13 +42,13 @@ check("ministral: [THINK] tags, nothing forced, image-text checkpoint, system pr
 check("ministral: FlashInfer sampler off in its image; other profiles add no env",
       mini["ENV"] == {"VLLM_USE_FLASHINFER_SAMPLER": "0"} and qwen["ENV"] == {} and base["ENV"] == {}, mini["ENV"])
 check("profiles hash apart", len({base["sha"], qwen["sha"], mini["sha"]}) == 3)
-bad = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {CONFIRM!r}); import spec"],
+bad = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {REPL!r}); import spec"],
                      env={**os.environ, "E0_MODEL": "nope"}, capture_output=True, text=True)
 check("an unknown E0_MODEL is refused", bad.returncode != 0 and "ministral3-3b" in bad.stderr, bad.stderr[-200:])
 
 # the rest runs in this interpreter under the Ministral profile
 os.environ["E0_MODEL"] = "ministral3-3b"
-sys.path.insert(0, CONFIRM)
+sys.path.insert(0, REPL)
 sys.path.insert(0, os.path.join(ROOT, "src", "recovery"))
 import spec  # noqa: E402
 import gpu_prep as G  # noqa: E402
@@ -171,7 +171,7 @@ with tempfile.TemporaryDirectory() as d:
                 f.write(json.dumps({"problem_id": pid, "problem": f"p{pid}", "gold": "1", "level": lv,
                                     "subject": "Algebra", "uid": f"u{pid}"}) + "\n")
     out = os.path.join(d, "l5.jsonl")
-    run = lambda *x: subprocess.run([sys.executable, os.path.join(CONFIRM, "dev_problems.py"), "--traces", tr, *x],
+    run = lambda *x: subprocess.run([sys.executable, os.path.join(REPL, "dev_problems.py"), "--traces", tr, *x],
                                     capture_output=True, text=True)
     r = run("--out", out, "--levels", "5")
     rows = [json.loads(x) for x in open(out)]

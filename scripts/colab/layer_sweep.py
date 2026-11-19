@@ -1,6 +1,6 @@
 """E0 full results table: every extracted layer x every checkpoint, with baselines side by side.
 
-Adapted from the drafted e0_full_table.py to the real files:
+Adapted from the drafted layer_sweep.py to the real files:
   acts_full.npy / meta_full.parquet / full_config.json   extract_full.py (BOS matched to generation)
   traces_B.jsonl                                          labels and line numbers
   recovery_ceiling                                        the Modal ceiling rollouts (row format 3)
@@ -199,16 +199,16 @@ def main():
                                                               for t in keys]))["auroc"] for _ in range(NDRAW)]
                 out.append(dict(block="ceiling", ckpt=ckpt, arm=f"r_hat_k{k}", layer=None, auroc=float(np.mean(vals)),
                                 lo=np.nan, hi=np.nan, pairs=np.nan, n_problems=np.nan))
-        pd.DataFrame(out).to_csv(os.path.join(a.out, "e0_full_table_long.csv"), index=False)  # partial, per ckpt
+        pd.DataFrame(out).to_csv(os.path.join(a.out, "layer_sweep_long.csv"), index=False)  # partial, per ckpt
 
     long = pd.DataFrame(out)
-    long.to_csv(os.path.join(a.out, "e0_full_table_long.csv"), index=False)
-    pd.DataFrame(counts).to_csv(os.path.join(a.out, "e0_full_table_counts.csv"), index=False)
+    long.to_csv(os.path.join(a.out, "layer_sweep_long.csv"), index=False)
+    pd.DataFrame(counts).to_csv(os.path.join(a.out, "layer_sweep_counts.csv"), index=False)
     cell = lambda r: "" if pd.isna(r.auroc) else (f"{r.auroc:.3f}" if pd.isna(r.lo) else
                                                   f"{r.auroc:.3f} [{r.lo:.2f}, {r.hi:.2f}]")
     long["cell"] = long.apply(cell, axis=1)
     long["row"] = [arm if pd.isna(L) else f"{arm} L{int(L)}" for arm, L in zip(long.arm, long.layer)]
-    for blk, name in (("grid", "e0_full_table.csv"), ("ceiling", "e0_full_table_ceiling.csv")):
+    for blk, name in (("grid", "layer_sweep.csv"), ("ceiling", "layer_sweep_ceiling.csv")):
         g = long[long.block == blk]
         if not len(g):
             continue

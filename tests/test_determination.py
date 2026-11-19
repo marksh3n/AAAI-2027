@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-sys.path.insert(0, os.path.join(ROOT, "src", "explore"))
+sys.path.insert(0, os.path.join(ROOT, "src", "analysis"))
 sys.path.insert(0, os.path.join(ROOT, "src", "probe_cmp"))
 import determination as X  # noqa: E402
 

@@ -17,8 +17,8 @@ INP, OUT = f"{VOL}/inputs", f"{VOL}/outputs"
 COMMIT_S = 120
 DAY = 24 * 3600
 
-# locally the repo's src/confirm; inside the container the same files, mounted at /root/src
-for p in (ROOT / "src" / "confirm", Path("/root/src/confirm")):
+# locally the repo's src/replication; inside the container the same files, mounted at /root/src
+for p in (ROOT / "src" / "replication", Path("/root/src/replication")):
     if (p / "spec.py").exists():
         sys.path.insert(0, str(p))
         break
@@ -39,8 +39,8 @@ image = (
     .add_local_dir(ROOT / "src", "/root/src", ignore=["**/__pycache__", "**/*.pyc"])
 )
 RUNNER = "/root/src/recovery/run_rollouts.py"
-PREP = "/root/src/confirm/gpu_prep.py"
-CONF = "/root/src/confirm/confidence.py"
+PREP = "/root/src/replication/gpu_prep.py"
+CONF = "/root/src/replication/confidence.py"
 SAMPLING = ["--temp", str(spec.TEMPERATURE), "--top-p", str(spec.TOP_P), "--revision", spec.MODEL_REVISION,
             "--model", spec.MODEL, "--dtype", spec.DTYPE, "--vllm-version", spec.VLLM_VERSION]
 if spec.VLLM_ARGS:
@@ -134,7 +134,7 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
         if sg not in GPU_FNS:
             raise SystemExit(f"--smoke-gpu must be one of {', '.join(GPU_FNS)}")
         GPU_FNS[sg].remote([
-            [PREP, "t0", "--problems", "/root/src/confirm/smoke_problems.jsonl", "--out", f"{s}/t0.jsonl", "--smoke"],
+            [PREP, "t0", "--problems", "/root/src/replication/smoke_problems.jsonl", "--out", f"{s}/t0.jsonl", "--smoke"],
             runner(f"{s}/t0.jsonl", f"{s}/sources.jsonl", 0, 2, "full", sg, 0, key, cap + ["300"]),
             [PREP, "extract", "--sources", f"{s}/sources.jsonl", "--t0", f"{s}/t0.jsonl", "--out", f"{s}/feats",
              "--checkpoints", "64,128", "--smoke"],
@@ -167,7 +167,7 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
         first = [] if spec.REPLICATION else [runner(t0, bank, 1, spec.K_T0, "sha", gpu, budget, key)]
         GPU_FNS[gpu].remote(first + [runner(cuts, bank, 0, spec.K_PREFIX, "sha", gpu, budget, key)])
     elif step == "confidence":
-        # per-token confidences of the bank's source prefixes (src/confirm/confidence.py) -> /outputs/confidence.
+        # per-token confidences of the bank's source prefixes (src/replication/confidence.py) -> /outputs/confidence.
         # replication models read their cuts file; the confirmation model (DeepSeek) re-tokenizes tag-B, from
         # /inputs/traces_B.jsonl and /inputs/ds_cohort.jsonl (the ceiling cuts with their rollout prefix_sha)
         out = f"{OUT}/confidence"

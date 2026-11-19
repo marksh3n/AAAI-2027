@@ -11,7 +11,7 @@
 #   gold_written   the gold value already appears as a standalone value in the prefix
 #   final_written  the trace's own final answer already appears in the prefix (future)
 #   last_correct   the last stated candidate equals gold
-#   python src/explore/commitment.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> \
+#   python src/analysis/commitment.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> \
 #       --meta <meta_B.parquet> --split results/split.json --half explore --out <dir> [--audit 30]
 import argparse, json, os, re, sys
 import numpy as np

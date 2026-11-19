@@ -3,7 +3,7 @@
 # whitespace-collapsed problem text>" over qwedsacf/competition_math; gold = last \boxed{} of the reference
 # solution. refuses an id list whose sha256 is not spec.SLOTS["problem_ids_csv_sha256"]. prints the file's sha256
 # for spec.SLOTS["problems_file_sha256"]. downloads the dataset: run on Colab.
-#   python src/confirm/build_problems.py --ids confirmation_after_pilot_1000.csv --out problems.jsonl
+#   python src/replication/build_problems.py --ids confirmation_after_pilot_1000.csv --out problems.jsonl
 import argparse, csv, hashlib, json, os, sys, unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))

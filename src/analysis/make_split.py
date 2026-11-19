@@ -1,6 +1,6 @@
 # fixed 50/50 problem split of the ceiling-rollout cohort: explore (Phase 3 choices) and holdout (sign check).
 # stratified by MATH level, seed 0. written once, before any Phase 3 result.
-#   python src/explore/make_split.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> --out results/split.json
+#   python src/analysis/make_split.py --rollouts data/recovery_ceiling --traces <traces_B.jsonl> --out results/split.json
 import argparse, hashlib, json
 import numpy as np
 
