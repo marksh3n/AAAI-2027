@@ -197,7 +197,7 @@ def checkpoints(a):
 def cohort(src, cuts):
     # cuts that get re-runs: every finished source past the cut (live or not), in problems whose sources
     # are mixed (some correct, some wrong), with at least 2 such cuts at that c.
-    # the analysis then keeps problems whose cohort cuts include both outcomes (analysis/consistent_rule.py)
+    # the analysis then keeps problems whose cohort cuts include both outcomes (analysis/inputs.both_outcomes)
     ok = src.set_index("trace_id")
     acc = src.groupby("problem_id").correct.agg(["min", "max"])
     mixed = set(acc.index[(acc["min"] == 0) & (acc["max"] == 1)])
