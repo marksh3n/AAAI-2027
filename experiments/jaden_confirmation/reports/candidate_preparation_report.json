@@ -1,0 +1,57 @@
+{
+  "artifact_status": "candidate_pool_not_frozen",
+  "final_confirmation_set_selected": false,
+  "normalization": "Unicode NFKC, then collapse all whitespace; preserve case and punctuation",
+  "seed": 20261018,
+  "ordering": "sort by normalized-text SHA256, then seeded shuffle",
+  "source_rows": 12500,
+  "source_levels": {
+    "1": 1001,
+    "2": 2242,
+    "3": 2723,
+    "4": 2904,
+    "5": 3628,
+    "unrecognized": 2
+  },
+  "eligible_level_rows_before_exclusions": 9255,
+  "math500_exclusion_records": 500,
+  "additional_inspected_exports": {},
+  "candidate_count": 8881,
+  "candidate_levels": {
+    "3": 2615,
+    "4": 2776,
+    "5": 3490
+  },
+  "excluded_by_reason": {
+    "duplicate_level_conflict": 2,
+    "duplicate_problem_text": 1,
+    "invalid_level": 2,
+    "math500_text": 367,
+    "missing_or_malformed_gold": 4,
+    "outside_levels_3_5": 3243
+  },
+  "duplicate_gold_conflict_groups": 0,
+  "input_files": [
+    {
+      "path": "confirmation-kit/data/raw/math_full.jsonl",
+      "bytes": 13453484,
+      "sha256": "83ebae157f5ba1f522abe1e424067e8c661f7df66e225bfec84ff7f132900f3d"
+    },
+    {
+      "path": "confirmation-kit/data/raw/math500.jsonl",
+      "bytes": 538454,
+      "sha256": "a930db7533531003cdb997b8db8cfba3baf6c042a1db1185d59324c95640e6a5"
+    }
+  ],
+  "candidate_file": {
+    "path": "confirmation-kit/data/prepared/candidate_pool.jsonl",
+    "bytes": 14303037,
+    "sha256": "2ae3de181e40fada5b45f3e5f8e78bfb8df99ee1eaf0bc14cb5d141153185c1c"
+  },
+  "limitations": [
+    "Freshness is relative only to the MATH-500 and inspected exports supplied here.",
+    "NFKC/whitespace matching does not rule out paraphrases, semantic duplicates or model pretraining exposure.",
+    "A mirror split named train does not certify original MATH train/test membership.",
+    "Freeze the protocol and final sample size before selecting or generating confirmation outcomes."
+  ]
+}
