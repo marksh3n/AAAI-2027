@@ -19,6 +19,7 @@ import argparse, json, os, sys
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
@@ -125,6 +126,19 @@ def features(tc, tr, meta, acts, cut, all_traces):
     y = (~tr.loc[rows.trace_id, "is_correct"].astype(bool)).astype(int).values
     oof = pd.Series(probe_y(X, y, rows.problem_id.values), index=rows.trace_id.values)
     f["probe_y"] = oof.loc[tc.trace_id].values
+    # the same scores over every trace at the cut: pooled AUROC (rewards difficulty) next to within-problem AUROC
+    g_all = rows.problem_id.values
+    pids_all = np.unique(g_all)
+    boot = np.random.default_rng(0)
+    pooled = []
+    for _ in range(500):
+        idx = np.concatenate([np.where(g_all == p)[0] for p in boot.choice(pids_all, len(pids_all))])
+        if 0 < y[idx].sum() < len(idx):
+            pooled.append(roc_auc_score(y[idx], oof.values[idx]))
+    f["_probe_y_all"] = {"pooled": roc_auc_score(y, oof.values), "pooled_lo": np.percentile(pooled, 2.5),
+                         "pooled_hi": np.percentile(pooled, 97.5),
+                         "within": S.Pairs(y, g_all).auroc(oof.values)["weighted"], "traces": len(y),
+                         "problems": len(pids_all)}
     rem = np.log1p(np.maximum(tr.loc[rows.trace_id, "n_gen"].values - cut, 0).astype(float))
     oof_len = pd.Series(probe_len(X, rem, rows.problem_id.values), index=rows.trace_id.values)
     f["probe_len"] = oof_len.loc[tc.trace_id].values
@@ -157,6 +171,12 @@ def run(t, tr, meta, acts, n_boot=2000, seed=0, log=print):
         yc = (~tr.loc[tc.trace_id, "is_correct"].astype(bool)).astype(int).values
         pairs = S.Pairs(yc, g)
         log(f"  probe_len within-problem corr with remaining length (all dev traces): {f['_probe_len_wp_corr']:.3f}")
+        pa = f["_probe_y_all"]
+        rows.append({"cut": int(cut), "what": "probe_y auroc, all traces", "est": pa["pooled"], "lo": pa["pooled_lo"],
+                     "hi": pa["pooled_hi"], "wp_auroc_y": pa["within"], "traces": pa["traces"],
+                     "problems": pa["problems"]})
+        log(f"  probe_y on all traces at the cut: pooled AUROC {pa['pooled']:.3f} "
+            f"[{pa['pooled_lo']:.3f}, {pa['pooled_hi']:.3f}], within problem {pa['within']:.3f}")
         for name in PREDICTORS:
             x = f[name]
             sa, sb, sf = (sums(g, x, h).loc[pids].values for h in (A, B, x))

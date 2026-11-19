@@ -58,7 +58,6 @@ control: `scripts/colab/extract_full.py`, then `scripts/colab/layer_sweep.py`.
 
 ## Notes
 
-- Sources were sampled at T 0.7 with a string prompt: lines 0-479 of `traces_B.jsonl` got one BOS, 480+ two
-  (`colab/bos_check.py`); re-runs use two everywhere. `colab/temp_blocks.py` checks T 0.7 per block.
+- Sources were sampled at T 0.7 (`colab/temp_blocks.py` checks it per generation block).
 - Qwen3 and Ministral re-runs get 32,768 − cut tokens; DeepSeek's got 32,768 after the cut.
 - DeepSeek states come from re-tokenized text; Qwen3 and Ministral from the sampled ids.
