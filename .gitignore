@@ -219,3 +219,12 @@ __marimo__/
 
 # e0 outputs
 data/
+
+# analysis outputs (scripts/reproduce_analysis.sh)
+results/deepseek/
+results/models/
+results/limit_hits/
+results/confidence/
+results/*.csv
+results/*.txt
+figures/

@@ -23,7 +23,7 @@ def check(name, cond, extra=""):
 
 
 # synthetic E0-shaped data: 20 problems x 6 traces, positions 8 and 16, an end,
-# and a "Mark-style" intermediate source at 24 added through the registry alone
+# and a second-extraction intermediate source at 24 added through the registry alone
 DIM, LAYERS, L20 = 80, [-1, 0, 4, 8, 12, 16, 20, 24, 27], 6
 
 

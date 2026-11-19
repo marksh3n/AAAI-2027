@@ -1,4 +1,4 @@
-# Modal wrapper for the r(t) ceiling run; usage in RUN_MODAL.md. Each step runs one
+# Modal wrapper for the r(t) ceiling run; usage in docs/modal.md. Each step runs one
 # src/recovery script with the "e0-recovery" Volume at /vol:
 #   /vol/inputs   traces_B.jsonl, prefixes_ceiling.jsonl   (scripts/modal_upload.sh)
 #   /vol/outputs  rollouts, temperature check, smoke files
