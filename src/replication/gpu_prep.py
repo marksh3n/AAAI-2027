@@ -1,23 +1,20 @@
-# confirmation data pipeline around src/recovery/run_rollouts.py. docs/RUN_CONFIRM_GPU.md has the
-# order and the exact commands; scripts/confirm_modal.py runs them on Modal.
-#   t0       CPU   problems file -> prompt records (one BOS, ids pinned) for the source traces
-#                  (run_rollouts round 0, n = samples per problem) and the t0 bank (round 1, K_T0)
-#   extract  GPU   sources -> layer-20 states at c - 1 from the exact generated ids, every c the
-#                  trace runs past; feats.parquet holds the decoded prefix and its flags
-#   cuts     CPU   sources -> one record per LIVE (trace, c): prefix ids, max_tokens = 32768 - c
-#   check    CPU   the smoke assertions on whatever the steps above wrote
-# every file carries the spec hash; run_rollouts pins the revision with --revision.
-import argparse, hashlib, json, os, sys
+# data pipeline for one model profile (spec.py) around src/recovery/run_rollouts.py;
+# scripts/replication_modal.py runs the steps on Modal.
+#   t0       CPU   problems file -> prompt records (BOS rule checked, ids pinned) for the source traces
+#   extract  GPU   sources -> layer-L states at CUT - 1 from the sampled ids; feats.parquet holds the
+#                  decoded prefix and its flags
+#   cuts     CPU   sources -> one record per cohort cut: prefix ids, max_tokens = MAX_NEW - CUT
+#   check    CPU   smoke-test assertions on whatever the steps above wrote
+# every file carries spec_sha(); run_rollouts pins the revision with --revision.
+import argparse, hashlib, json, os, re, sys
 import numpy as np
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.dirname(HERE)
-sys.path.insert(0, HERE)
-sys.path.insert(0, SRC)
-sys.path.insert(0, os.path.join(SRC, "recovery"))
+sys.path[:0] = [HERE, SRC, os.path.join(SRC, "recovery"), os.path.join(SRC, "probe_cmp")]
 import spec  # noqa: E402
-import bundle_lib as B  # noqa: E402
+from ceiling import answer_flags, norm  # noqa: E402
 
 
 def tokenizer():
@@ -102,9 +99,30 @@ def canon(text):
     return text.replace(b, "</think>").replace(a, "<think>")
 
 
+def stated(prefix_text, final_answer):
+    # the trace's final answer written right after an answer cue on the same line ("the answer is 6")
+    if final_answer is None or (isinstance(final_answer, float) and np.isnan(final_answer)) or not norm(final_answer):
+        return False
+    text = re.sub(r"\\(left|right)", "", prefix_text).replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
+    cue = "|".join(re.escape(c) for c in spec.ANSWER_CUES)
+    a = re.escape(norm(final_answer))
+    return bool(re.search(rf"(?i:{cue})[^\n]{{0,{spec.ANSWER_CUE_WINDOW}}}?(?<![\w.]){a}(?!\w|\.\d)", text))
+
+
+def cut_rules(prefix_text, final_answer, still_generating):
+    # live: still generating and thinking not closed. three pre-answer rules, each within live:
+    #   pre_answer: no \boxed and no stated answer
+    #   pre_answer_strict: the final answer value nowhere in the prefix
+    #   pre_answer_think_boxed: no \boxed (the rule the paper uses)
+    live = bool(still_generating) and spec.THINK_END not in prefix_text
+    boxed = "\\boxed" in prefix_text
+    _, leaked = answer_flags(prefix_text, final_answer)
+    return {"live": live, "pre_answer": live and not boxed and not stated(prefix_text, final_answer),
+            "pre_answer_strict": live and not leaked, "pre_answer_think_boxed": live and not boxed}
+
+
 def bos_ok(tok, ids):
-    # "one": exactly one leading BOS (the confirmation model). "template" (replication): whatever the chat
-    # template writes, but never two leading BOS
+    # "one": exactly one leading BOS. "template": whatever the chat template writes, never two
     bos = tok.bos_token_id
     if spec.BOS == "one":
         return ids[0] == bos and ids[1] != bos
@@ -133,14 +151,6 @@ def load_problems(path):
 
 def cmd_t0(a):
     sha = spec.file_sha(a.problems)
-    want = spec.SLOTS["problems_file_sha256"]
-    free = a.smoke or spec.REPLICATION  # a replication run is not the confirmation: no slot checks
-    if spec.SLOTS.get("status") != "frozen" and not free:
-        raise SystemExit(f"team slots are {spec.SLOTS.get('status')}, not frozen")
-    if want is None and not free:
-        raise SystemExit("spec.SLOTS['problems_file_sha256'] is empty: the confirmation population is not frozen yet")
-    if want is not None and sha != want and not free:
-        raise SystemExit(f"{a.problems} has sha256 {sha}, the frozen list is {want}")
     probs = load_problems(a.problems)[: (2 if a.smoke else None)]
     tok = tokenizer()
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
@@ -150,7 +160,7 @@ def cmd_t0(a):
             if k == 0:
                 print(f"first prompt, {len(ids)} ids {ids[:4]}...: {text[:90]!r} ... {text[-90:]!r}", flush=True)
             f.write(json.dumps({
-                "prefix_id": f"t0/{p['problem_id']}", "source": "confirmation", "problem_id": p["problem_id"],
+                "prefix_id": f"t0/{p['problem_id']}", "source": "replication", "problem_id": p["problem_id"],
                 "trace_id": None, "checkpoint": "t0", "cut_token_idx": 0, "gold_answer": p["gold"],
                 "prompt_text": text, "prompt_token_ids": ids, "prefix_gen_token_ids": [],
                 "max_tokens": spec.MAX_NEW, "est_cont_tokens": a.est_tokens, "bos": spec.BOS,
@@ -181,20 +191,17 @@ def sources_table(path, min_samples=None):
 
 
 def checkpoints(a):
-    if a.checkpoints:
-        if not (a.smoke or spec.REPLICATION):
-            raise SystemExit("--checkpoints is for the smoke test only; the frozen ones are spec.CHECKPOINTS")
-        return [int(c) for c in a.checkpoints.split(",")]
-    return [spec.Q1_CUT] if spec.REPLICATION else list(spec.CHECKPOINTS)
+    return [int(c) for c in a.checkpoints.split(",")] if a.checkpoints else [spec.CUT]
 
 
-def replication_pool(src, cuts):
-    # replication bank, as the ceiling cohort: every untruncated source past the cut (live or not), in
-    # problems whose sources are mixed (some correct, some wrong), with at least 2 such cuts at that c
+def cohort(src, cuts):
+    # cuts that get re-runs: every finished source past the cut (live or not), in problems whose sources
+    # are mixed (some correct, some wrong), with at least 2 such cuts at that c.
+    # the analysis then keeps problems whose cohort cuts include both outcomes (analysis/consistent_rule.py)
     ok = src.set_index("trace_id")
     acc = src.groupby("problem_id").correct.agg(["min", "max"])
     mixed = set(acc.index[(acc["min"] == 0) & (acc["max"] == 1)])
-    # E0_POOL_TRUNC=1 keeps sources that hit the token limit (they count as wrong): a superset of the default pool
+    # E0_POOL_TRUNC=1 also keeps sources that hit the token limit, counted as wrong
     keep = np.ones(len(cuts), bool) if os.environ.get("E0_POOL_TRUNC") == "1" else ~ok.loc[cuts.trace_id, "truncated"].values
     pool = cuts[keep & cuts.problem_id.isin(mixed)]
     n = pool.groupby(["problem_id", "checkpoint"]).trace_id.transform("size")
@@ -210,7 +217,7 @@ def cut_table(src, tok, ckpts):
                 continue
             text = canon(tok.decode(t.token_ids[:c]))
             rows.append({"trace_id": t.trace_id, "problem_id": t.problem_id, "checkpoint": c,
-                         **B.cut_rules(text, t.answer, True), "prefix_text": text,
+                         **cut_rules(text, t.answer, True), "prefix_text": text,
                          "prefix_sha": hashlib.sha256(json.dumps(list(t.token_ids[:c])).encode()).hexdigest()})
     return pd.DataFrame(rows)
 
@@ -223,7 +230,7 @@ def cmd_cuts(a):
     # planning only (run_rollouts' budget gate): mean remaining length of the problem's sources past c
     est = {(p, c): int(np.mean([min(n, spec.MAX_NEW) - c for n in g.n if n > c]) or 1)
            for p, g in src.groupby("problem_id") for c in checkpoints(a) if (g.n > c).any()}
-    pool = replication_pool(src, cuts) if spec.REPLICATION and not a.smoke else cuts[cuts.live]
+    pool = cuts[cuts.live] if a.smoke else cohort(src, cuts)
     n = 0
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as f:
@@ -231,14 +238,14 @@ def cmd_cuts(a):
             t = src.set_index("trace_id").loc[c.trace_id]
             p = t0[c.problem_id]
             f.write(json.dumps({
-                "prefix_id": f"cut/{c.trace_id}/{c.checkpoint}", "source": "confirmation", "problem_id": c.problem_id,
+                "prefix_id": f"cut/{c.trace_id}/{c.checkpoint}", "source": "replication", "problem_id": c.problem_id,
                 "trace_id": c.trace_id, "checkpoint": f"p{c.checkpoint}", "cut_token_idx": c.checkpoint,
                 "gold_answer": p["gold_answer"], "prompt_text": p["prompt_text"], "prompt_token_ids": p["prompt_token_ids"],
                 "prefix_gen_token_ids": list(t.token_ids[: c.checkpoint]), "max_tokens": spec.MAX_NEW - c.checkpoint,
                 "est_cont_tokens": est[(c.problem_id, c.checkpoint)], "bos": spec.BOS, "spec_sha256": spec.spec_sha()}) + "\n")
             n += 1
     print(f"{len(src)} sources ({src.correct.mean():.3f} correct), {len(cuts)} cuts past a checkpoint, "
-          f"{n} to the bank ({'mixed-problem cohort' if spec.REPLICATION and not a.smoke else 'live'}) -> {a.out}")
+          f"{n} to the bank ({'live' if a.smoke else 'cohort'}) -> {a.out}")
     print(cuts.groupby("checkpoint").agg(cuts=("live", "size"), live=("live", "sum"), pre_answer=("pre_answer", "sum")).to_string())
     print(bank_plan(src, pool, est, a.sources))
 
@@ -315,7 +322,7 @@ def cmd_extract(a):
 
 
 def cmd_check(a):
-    # the smoke assertions: one BOS, ids == n_gen, decode round trip, a recomputed state, a bank row per live cut
+    # smoke-test assertions: BOS rule, ids == n_gen, decode round trip, a recomputed state, a bank row per cut
     ok = []
     src = sources_table(a.sources)
     t0 = {r["problem_id"]: r for r in map(json.loads, open(a.t0))}
@@ -349,9 +356,7 @@ def cmd_check(a):
         rows = read_rows(a.bank)
         have = {(r["trace_id"], r["checkpoint"]) for r in rows}
         live = [r for r in map(json.loads, open(a.cuts))]
-        ok.append(("a bank row for every live cut", all((r["trace_id"], r["checkpoint"]) in have for r in live)))
-        ok.append(("a t0 bank row (round 1) for every problem",
-                   {r["problem_id"] for r in rows if r["checkpoint"] == "t0" and r["round"] == 1} == set(t0)))
+        ok.append(("a bank row for every cut", all((r["trace_id"], r["checkpoint"]) in have for r in live)))
         ok.append(("bank continuations carry token-id hashes", all("token_ids_sha256" in s for r in rows for s in r["samples"])))
         ok.append(("bank max_tokens == 32768 - cut", all(r["max_tokens"] == spec.MAX_NEW - r["cut_token_idx"] or a.smoke for r in rows)))
     for name, good in ok:

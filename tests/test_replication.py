@@ -25,8 +25,8 @@ def spec_under(key):
 
 print("1. profiles")
 base, qwen, mini = spec_under(""), spec_under("qwen3-1.7b"), spec_under("ministral3-3b")
-check("confirmation spec hash unchanged by the port", base["sha"]
-      == "f653c2e774a37981ecd9fc17cdeafe8e5aa13894ab0cb6ff4196013d2a4e60ca", base["sha"])
+check("default profile is DeepSeek-R1-Distill-Qwen-1.5B, layer 20, one BOS",
+      (base["MODEL"], base["LAYER"], base["BOS"]) == ("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", 20, "one"), base)
 check("qwen3-1.7b keeps the old stack, <think> and no engine args",
       (qwen["VLLM_VERSION"], qwen["TRANSFORMERS_VERSION"], qwen["VLLM_ARGS"], qwen["THINK_TAGS"], qwen["FORCE_THINK"])
       == ("0.10.2", "4.56.2", {}, ["<think>", "</think>"], True), qwen)
@@ -52,7 +52,6 @@ sys.path.insert(0, REPL)
 sys.path.insert(0, os.path.join(ROOT, "src", "recovery"))
 import spec  # noqa: E402
 import gpu_prep as G  # noqa: E402
-import bundle_lib as BL  # noqa: E402
 for name, attrs in (("torch", {}), ("datasets", {"load_dataset": None}),
                     ("math_verify", {"parse": lambda x: x, "verify": lambda a, b: a == b}),
                     ("transformers", {"AutoTokenizer": object, "AutoModelForCausalLM": object})):
@@ -91,8 +90,8 @@ except SystemExit as e:
     check("a prompt without the system prompt is refused (what transformers 5 rendered)", "SYSTEM_PROMPT" in str(e))
 check("canon: [THINK] / [/THINK] -> <think> / </think>",
       G.canon("[THINK]a\n\nb[/THINK]c \\boxed{2}") == "<think>a\n\nb</think>c \\boxed{2}")
-live = BL.cut_rules(G.canon("[THINK]so 2 + 2"), "4", True)
-closed = BL.cut_rules(G.canon("[THINK]so 4[/THINK]The answer"), "4", True)
+live = G.cut_rules(G.canon("[THINK]so 2 + 2"), "4", True)
+closed = G.cut_rules(G.canon("[THINK]so 4[/THINK]The answer"), "4", True)
 check("a cut inside [THINK] is live", live["live"] and live["pre_answer"], live)
 check("a cut after [/THINK] is not live", not closed["live"] and not closed["pre_answer_think_boxed"], closed)
 check("BOS rule one: [1, 17, ...] ok, [1, 1, ...] not", G.bos_ok(Tok(), [1, 17, 5]) and not G.bos_ok(Tok(), [1, 1, 17]))
@@ -227,7 +226,7 @@ class LLM:
         return types.SimpleNamespace(decode=lambda ids: "")
 
 
-rec = lambda i: {"prefix_id": f"t0/{i}", "source": "confirmation", "problem_id": str(i), "trace_id": None,
+rec = lambda i: {"prefix_id": f"t0/{i}", "source": "replication", "problem_id": str(i), "trace_id": None,
                  "checkpoint": "t0", "cut_token_idx": 0, "gold_answer": "12", "prompt_token_ids": [1, 17],
                  "prefix_gen_token_ids": [], "max_tokens": 50, "est_cont_tokens": 10}
 args = types.SimpleNamespace(inflight=8, temp=0.7, top_p=0.95, max_tokens_cap=0, seed=0, round=0, n=2,
@@ -253,7 +252,7 @@ ap = RR.add_args(__import__("argparse").ArgumentParser())
 a = ap.parse_args(["--engine-args", json.dumps(spec.VLLM_ARGS), "--vllm-version", spec.VLLM_VERSION])
 check("runner takes the version and the engine args", a.vllm_version == "0.32.0"
       and json.loads(a.engine_args)["load_format"] == "mistral")
-check("runner default version is still the confirmation one", ap.parse_args([]).vllm_version == "0.10.2")
+check("runner default version is DeepSeek's", ap.parse_args([]).vllm_version == "0.10.2")
 
 print(f"\n{'all passed' if not fails else f'{len(fails)} FAILED: {fails}'}")
 sys.exit(1 if fails else 0)

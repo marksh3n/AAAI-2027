@@ -1,8 +1,8 @@
-# Modal wrapper for the confirmation data run; usage and order in docs/RUN_CONFIRM_GPU.md. Same
-# pattern as modal_app.py, its own app and Volume ("e0-confirm"). With E0_MODEL set (spec.PROFILES) it is
-# a replication run on that model instead: app and Volume "e0-<model>", cut at spec.Q1_CUT only, the bank
-# on the mixed-problem cohort only, no t0 bank, smoke on an L4 (bf16):
-#   /vol/inputs   problems.jsonl (the frozen problem list)
+# Modal wrapper for one model profile (E0_MODEL, src/replication/spec.py): sources, hidden states, the
+# cohort cuts at spec.CUT and their re-runs, in app and Volume "e0-<model>". Same pattern as modal_app.py.
+#   E0_MODEL=qwen3-1.7b modal run scripts/replication_modal.py --step smoke
+#   then t0, sources --samples 6 --budget <$>, extract, cuts, bank --budget <$>, confidence
+#   /vol/inputs   problems.jsonl (src/replication/dev_problems.py)
 #   /vol/outputs  t0.jsonl, sources.jsonl, feats/, cuts.jsonl, bank.jsonl (+ .config.json / ledgers)
 #   /vol/hf       HF_HOME
 # every GPU step resumes: run_rollouts skips (prefix, round) rows already written.
@@ -24,7 +24,7 @@ for p in (ROOT / "src" / "replication", Path("/root/src/replication")):
         break
 import spec  # noqa: E402
 
-NAME = f"e0-{spec.MODEL_KEY.replace('.', '-')}" if spec.REPLICATION else "e0-confirm"
+NAME = f"e0-{spec.MODEL_KEY.replace('.', '-')}"
 
 app = modal.App(NAME)
 vol = modal.Volume.from_name(NAME, create_if_missing=True)
@@ -122,11 +122,10 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
     key = f"{step}-{gpu}-{time.strftime('%Y%m%d-%H%M%S')}"
     t0, src, cuts, bank, feats = (f"{OUT}/t0.jsonl", f"{OUT}/sources.jsonl", f"{OUT}/cuts.jsonl",
                                   f"{OUT}/bank.jsonl", f"{OUT}/feats")
-    print(f"[e0] model {spec.MODEL} @ {spec.MODEL_REVISION[:8]}, app/volume {NAME}"
-          + (" (replication)" if spec.REPLICATION else ""), flush=True)
+    print(f"[e0] model {spec.MODEL} @ {spec.MODEL_REVISION[:8]}, app/volume {NAME}", flush=True)
     if step == "smoke":
         # the whole chain, small, on a T4 (an L4 for bf16 models): 2 bundled problems, 2 sources each capped
-        # at 300 tokens, checkpoints 64 / 128, 2 continuations per prefix capped at 64; ends with gpu_prep
+        # at 300 tokens, checkpoints 64 / 128, 2 re-runs per cut capped at 64; ends with gpu_prep
         # check --recompute
         s = f"{OUT}/smoke"
         cap = ["--max-tokens-cap"]
@@ -140,7 +139,6 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
              "--checkpoints", "64,128", "--smoke"],
             [PREP, "cuts", "--sources", f"{s}/sources.jsonl", "--t0", f"{s}/t0.jsonl", "--out", f"{s}/cuts.jsonl",
              "--checkpoints", "64,128", "--smoke"],
-            runner(f"{s}/t0.jsonl", f"{s}/bank.jsonl", 1, 2, "sha", sg, 0, key, cap + ["64"]),
             runner(f"{s}/cuts.jsonl", f"{s}/bank.jsonl", 0, 2, "sha", sg, 0, key, cap + ["64"]),
             [PREP, "check", "--sources", f"{s}/sources.jsonl", "--t0", f"{s}/t0.jsonl", "--feats", f"{s}/feats",
              "--bank", f"{s}/bank.jsonl", "--cuts", f"{s}/cuts.jsonl", "--smoke", "--recompute"],
@@ -149,12 +147,9 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
     if step == "t0":
         on_cpu.remote([[PREP, "t0", "--problems", f"{INP}/problems.jsonl", "--out", t0]])
     elif step == "sources":
-        n = samples or spec.SLOTS["samples_per_problem"]
-        if not n:
-            raise SystemExit("--samples is required until spec.SLOTS['samples_per_problem'] is frozen")
-        if not budget:
-            raise SystemExit("--budget is required (the Modal credit left, in $)")
-        GPU_FNS[gpu].remote([runner(t0, src, 0, n, "full", gpu, budget, key)])
+        if not samples or not budget:
+            raise SystemExit("--samples (source traces per problem) and --budget (Modal credit left, $) are required")
+        GPU_FNS[gpu].remote([runner(t0, src, 0, samples, "full", gpu, budget, key)])
     elif step == "extract":
         GPU_FNS[gpu].remote([[PREP, "extract", "--sources", src, "--t0", t0, "--out", feats]])
     elif step == "cuts":
@@ -162,16 +157,13 @@ def main(step: str, gpu: str = "h100", budget: float = 0, samples: int = 0, smok
     elif step == "bank":
         if not budget:
             raise SystemExit("--budget is required (the Modal credit left, in $)")
-        # t0 bank first (round 1: round 0 of these records is the sources), then every live cut.
-        # a replication run has no t0 bank: its cuts only
-        first = [] if spec.REPLICATION else [runner(t0, bank, 1, spec.K_T0, "sha", gpu, budget, key)]
-        GPU_FNS[gpu].remote(first + [runner(cuts, bank, 0, spec.K_PREFIX, "sha", gpu, budget, key)])
+        GPU_FNS[gpu].remote([runner(cuts, bank, 0, spec.K_PREFIX, "sha", gpu, budget, key)])
     elif step == "confidence":
         # per-token confidences of the bank's source prefixes (src/replication/confidence.py) -> /outputs/confidence.
-        # replication models read their cuts file; the confirmation model (DeepSeek) re-tokenizes tag-B, from
-        # /inputs/traces_B.jsonl and /inputs/ds_cohort.jsonl (the ceiling cuts with their rollout prefix_sha)
+        # Qwen3 / Ministral read their cuts file. DeepSeek's sources came from src/generate_vllm.py, so its
+        # text is re-tokenized: /inputs/traces_B.jsonl and /inputs/ds_cohort.jsonl (re-run cuts with prefix_sha)
         out = f"{OUT}/confidence"
-        cmd = ([CONF, "cuts", "--cuts", cuts, "--out", out] if spec.REPLICATION else
+        cmd = ([CONF, "cuts", "--cuts", cuts, "--out", out] if spec.MODEL_KEY != "r1-1.5b" else
                [CONF, "ds", "--traces", f"{INP}/traces_B.jsonl", "--cohort", f"{INP}/ds_cohort.jsonl", "--out", out])
         GPU_FNS[gpu].remote([cmd])
     elif step == "status":
