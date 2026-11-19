@@ -12,7 +12,7 @@
 #   ds    DeepSeek: sampled ids were never stored. the generated text is re-tokenized as build_prefixes did, and each
 #         cut is checked three ways: n_gen == len(ids) + 1 (count), sha of (2-BOS prompt, ids[:cut]) == the
 #         rollout row's prefix_sha (the bank continued exactly these ids), and the nucleus test above. the prompt
-#         is scored with the BOS count the source was sampled with (tag-B lines < 480: one, else two)
+#         is scored with the BOS count the source was sampled with (traces_B.jsonl lines < 480: one, else two)
 #   python src/replication/confidence.py cuts --cuts cuts.jsonl --out <dir>
 #   python src/replication/confidence.py ds --traces traces_B.jsonl --cohort ds_cohort.jsonl --out <dir>
 import argparse, json, os, sys
@@ -28,7 +28,7 @@ MAX_CUT = 4096
 K = 20
 SAMPLER_T, SAMPLER_TOP_P = 0.7, 0.95
 CHUNK = 1024
-FIRST_BATCH_LINES = 480  # tag-B lines 0-479: the pilot, sampled with one BOS
+FIRST_BATCH_LINES = 480  # traces_B.jsonl lines 0-479: the pilot, sampled with one BOS
 
 
 def load_model():

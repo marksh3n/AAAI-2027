@@ -1,4 +1,4 @@
-# prefixes of tag-B traces at fixed checkpoints, one record per prefix.
+# prefixes of the DeepSeek source traces at fixed checkpoints, one record per prefix.
 # the schema is generic so edited / injected prefixes can share the runner later.
 import argparse, bisect, json, os
 from collections import Counter, defaultdict
@@ -155,7 +155,7 @@ def ceiling_population(traces, lens, min_len, limit_hits=False):
 
 
 def est_cont_tokens(all_traces, cut, cap):
-    # expected continuation length from cut: the problem's own tag-B traces (truncated ones
+    # expected continuation length from cut: the problem's own source traces (truncated ones
     # count at the cap) that ran past cut. only a planning number, never used as a cap.
     left = [min(t["n_gen"], MAX_NEW) - cut for t in all_traces if t["n_gen"] > cut]
     return int(min(np.mean(left), cap)) if left else cap
@@ -210,7 +210,7 @@ def build_ceiling(args, tokenizer, traces):
         p_ids = prompt_ids(tokenizer, problem["problem"])
         if p_ids[:2] != [tokenizer.bos_token_id] * 2:
             raise AssertionError(f"problem {pid}: prompt opens {p_ids[:3]}, not two BOS "
-                                 f"({tokenizer.bos_token_id}) as tag-B was sampled; check the "
+                                 f"({tokenizer.bos_token_id}) as the sources were sampled; check the "
                                  f"transformers version ({type(tokenizer).__name__})")
         everyone = by_problem[pid]
         pass_k, pass_n = sum(t["is_correct"] for t in everyone), len(everyone)
@@ -248,7 +248,7 @@ def build_ceiling(args, tokenizer, traces):
 
 
 def ceiling_report(records, n):
-    print(f"\n{len(records)} prefixes, est. tokens at n={n} (from tag-B lengths of the same problem):")
+    print(f"\n{len(records)} prefixes, est. tokens at n={n} (from source lengths of the same problem):")
     for key in ("checkpoint", "tier"):
         c, tok = Counter(), Counter()
         for r in records:

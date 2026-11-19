@@ -17,7 +17,7 @@ VOL = "/vol"
 INPUTS, OUTPUTS = f"{VOL}/inputs", f"{VOL}/outputs"
 PREFIXES = f"{INPUTS}/prefixes_ceiling.jsonl"
 ROLLOUTS = f"{OUTPUTS}/rollouts.jsonl"
-TEMP = 0.7  # tag-B sampling temperature; check_temp.py gates it
+TEMP = 0.7  # source sampling temperature; check_temp.py gates it
 COMMIT_S = 120
 DAY = 24 * 3600  # Modal's maximum function timeout
 
@@ -26,7 +26,7 @@ vol = modal.Volume.from_name(NAME, create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.11")
     # vllm 0.10.2 leaves transformers unpinned; transformers 5 breaks it and loads this
-    # model's tokenizer as Qwen2Tokenizer, which drops the second BOS that tag-B's string
+    # model's tokenizer as Qwen2Tokenizer, which drops the second BOS that the sources' string
     # prompts got. 4.56.2 is contemporary with vllm 0.10.2. datasets and math-verify are
     # imported by generate.py.
     .uv_pip_install("vllm==0.10.2", "transformers==4.56.2", "datasets", "math-verify>=0.5")

@@ -7,7 +7,7 @@ import numpy as np, pandas as pd
 DSB, DST, QO, MO = sys.argv[1:5]
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(os.path.dirname(HERE), "probe_cmp")]
-import cheap_rollouts as CR, determination as DT  # noqa: E402
+import cheap_rollouts as CR  # noqa: E402
 rng = np.random.default_rng(0)
 
 
@@ -20,7 +20,6 @@ def gap(name, t, y):
     g = t.problem_id.values
     ok = np.stack(t.ok.values).astype(float)
     k, w = ok.sum(1), ok.shape[1]
-    out = {}
     for sm in (0.5, 1.0):
         r = (k + sm) / (w + 2 * sm)
         a = np.array([(len(i), pred(r[i]), y[i].mean(), (k[i] / w).mean())

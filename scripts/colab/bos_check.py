@@ -4,7 +4,7 @@
 # adds a second BOS depends on the transformers version (5.x loads Qwen2Tokenizer and adds none).
 # the rollouts were built with two (build_prefixes asserts it; run_rollouts checks vLLM agrees).
 # teacher-forced: the variant that generated a trace has the higher expected log-likelihood.
-#   python bos_check.py --prefixes <lenfilter_prefixes.csv> --traces data/traces_B.jsonl
+#   python bos_check.py --rollouts data/recovery_ceiling --traces data/hf/traces_B.jsonl
 import argparse, json, os, sys
 import numpy as np
 import pandas as pd
@@ -13,7 +13,7 @@ import transformers
 from scipy.stats import binomtest
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--prefixes", required=True, help="lenfilter.py's per-prefix csv: the 448 population traces")
+ap.add_argument("--rollouts", required=True, help="the re-run file: its traces are the cohort")
 ap.add_argument("--traces", required=True)
 ap.add_argument("--repo", default=".")
 ap.add_argument("--n", type=int, default=30, help="traces per generation block")
@@ -21,7 +21,7 @@ ap.add_argument("--max-tokens-per-trace", type=int, default=2048)
 ap.add_argument("--out", default=None)
 a = ap.parse_args()
 sys.path.insert(0, os.path.join(a.repo, "src", "recovery"))
-from common import MODEL, TOP_P, build_prompt, canonical, encode_trace, load_tokenizer  # noqa: E402
+from common import MODEL, TOP_P, build_prompt, canonical, encode_trace, load_tokenizer, read_jsonl  # noqa: E402
 from check_temp import trace_curves  # noqa: E402
 from transformers import AutoModelForCausalLM  # noqa: E402
 
@@ -30,7 +30,7 @@ tok = load_tokenizer()
 bos = tok.bos_token_id
 traces = [json.loads(line) for line in open(a.traces)]
 line_of = {t["trace_id"]: i for i, t in enumerate(traces)}
-pop = sorted(set(pd.read_csv(a.prefixes).trace_id.dropna()), key=line_of.get)
+pop = sorted({r["trace_id"] for r in read_jsonl(a.rollouts) if r.get("trace_id")}, key=line_of.get)
 probe = build_prompt(tok, traces[line_of[pop[0]]]["problem"])
 head = tok(probe)["input_ids"][:3]
 print(f"this env: transformers {transformers.__version__}, {type(tok).__name__}; default tokenization of a "

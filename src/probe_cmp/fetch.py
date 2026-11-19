@@ -1,8 +1,8 @@
-# Colab: put every registered file into data/ (from the HF dataset) and, with --iter1, the
-# iteration-1 meta and acts from the shared Drive folder. registry-driven, so a new source
-# is fetched as soon as its entry and its files exist.
+# put every registered file into data/ from the HF dataset named by E0_HF_REPO and, with --iter1, the
+# between-problem run's meta and acts. registry-driven, so a new source is fetched as soon as its
+# entry and its files exist.
 #   python src/probe_cmp/fetch.py            # traces + every registered acts/meta pair
-#   %run src/probe_cmp/fetch.py --iter1      # also iteration-1 meta.parquet and acts.npy (1.6 GB);
+#   %run src/probe_cmp/fetch.py --iter1      # also between-problem run meta.parquet and acts.npy (1.6 GB);
 #                                            # %run, not !python: Colab auth needs the kernel
 import argparse, os, sys
 
@@ -10,8 +10,8 @@ import argparse, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import data as D  # noqa: E402
 
-REPO = "MarkSh3n/e0-shared"
-# iteration-1 run on the shared Drive: 367 problems x 1 trace, steps-mode acts
+REPO = os.environ.get("E0_HF_REPO", "")
+# between-problem run: 367 problems x 1 trace, steps-mode acts (Google Drive file ids)
 ITER1 = {"meta.parquet": "1Wku64a4n3p7DUd6O-IYd62oTvCA8LKOW", "acts.npy": "1uwAR6VlI1mF_3tf-nYHsIIeKHxw72YNE"}
 
 
@@ -63,7 +63,9 @@ def main():
     ap.add_argument("--registry", default=D.REGISTRY)
     ap.add_argument("--iter1", action="store_true")
     a = ap.parse_args()
-    # earlier notebook cells point data/ at a Drive folder that may no longer exist
+    if not REPO:
+        raise SystemExit("set E0_HF_REPO to the HF dataset holding the traces and states")
+    # a data/ link into a Drive folder that no longer exists
     if os.path.islink(a.data) and not os.path.exists(a.data):
         os.remove(a.data)
     os.makedirs(a.data, exist_ok=True)
@@ -71,7 +73,7 @@ def main():
     print(f"from {REPO}:")
     hf(a.data, [reg["traces"]] + [s[k] for s in reg["sources"] for k in ("acts", "meta")])
     if a.iter1:
-        print("iteration-1 files from Drive:")
+        print("between-problem run files from Drive:")
         drive(os.path.join(a.data, "iter1"), ITER1)
 
 

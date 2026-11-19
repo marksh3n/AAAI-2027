@@ -89,7 +89,7 @@ def add_args(parser):
     parser.add_argument("--n", type=int, default=0)
     parser.add_argument("--max-new", type=int, default=32768)
     parser.add_argument("--samples", type=int, default=1)
-    parser.add_argument("--temp", type=float, default=0.6)
+    parser.add_argument("--temp", type=float, default=0.7)  # the source traces were sampled at 0.7
     parser.add_argument("--tag", default="")
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--structured", action="store_true")

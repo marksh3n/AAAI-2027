@@ -1,13 +1,13 @@
 # registry-driven loading: which checkpoints exist comes from registry.json and the files on
 # disk, never from constants here. every pair is checked against traces_B.jsonl on load,
-# because meta and acts are joined by row index alone (the cache/offset bug was silent).
+# because meta and acts are joined by row index alone (an offset error would be silent).
 import json, os
 import numpy as np
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REGISTRY = os.path.join(HERE, "registry.json")
-MAX_NEW = 32768  # tag-B generation cap; n_gen at the cap means truncated
+MAX_NEW = 32768  # source generation cap; n_gen at the cap means truncated
 END = "end"
 
 
@@ -129,7 +129,7 @@ def check_pair(src, meta, acts, traces, hidden_dim):
             add("stored prefix is a prefix of the trace text", all(lit), f"{len(lit) - sum(lit)} rows differ")
             if src["kind"] == "position":
                 # a prefix column holding more (or less) than pos tokens of text would leak
-                # the future into len/tfidf; tag-B prefixes run 1.5-5 chars per token
+                # the future into len/tfidf; source prefixes run 1.5-5 chars per token
                 cpt = meta[col].str.len().values / np.maximum(meta[src["pos_col"]].values, 1)
                 bad = (cpt < 1) | (cpt > 8)
                 add("prefix length fits pos tokens (1-8 chars/token)", not bad.any(), f"{int(bad.sum())} rows")

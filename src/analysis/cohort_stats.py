@@ -1,4 +1,4 @@
-# remaining rows of the three-model table (appendix Table T7full) at the 4,096 cut: D by MATH level, D on
+# remaining rows of the three-model table (appendix) at the 4,096 cut: D by MATH level, D on
 # pre-answer cuts (no </think> or \boxed in the prefix), mean source length of cohort traces, median re-run
 # length from the cut, and the sampler gap (mean of r_hat minus the source's own outcome, problem bootstrap).
 # each under the cohort rule ("pairs") and on every re-run problem ("all"). DeepSeek's pre-answer row is in

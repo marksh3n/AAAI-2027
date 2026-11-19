@@ -1,6 +1,6 @@
-"""E0 full results table: every extracted layer x every checkpoint, with baselines side by side.
+"""Layer sweep (appendix tables): every extracted layer x every checkpoint, with baselines side by side.
 
-Adapted from the drafted layer_sweep.py to the real files:
+Inputs:
   acts_full.npy / meta_full.parquet / full_config.json   extract_full.py (BOS matched to generation)
   traces_B.jsonl                                          labels and line numbers
   recovery_ceiling                                        the Modal ceiling rollouts (row format 3)

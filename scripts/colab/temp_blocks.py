@@ -1,6 +1,6 @@
-# MLE of the sampling temperature behind traces_B, per generation block. the notebook shows the
-# pilot resuming with "8/80 problems left" under --temp 0.7, so lines 0-431 (72 problems) come from
-# an earlier invocation whose flags are not on record (generate.py's default --temp is 0.6),
+# MLE of the sampling temperature behind traces_B, per generation block. the generation log shows the
+# first run resuming with "8/80 problems left" under --temp 0.7, so lines 0-431 (72 problems) come from
+# an earlier invocation whose flags are not on record (generate.py then defaulted to --temp 0.6),
 # lines 432-479 from that visible --temp 0.7 resume, and 480+ from run_bg gen_B ... --temp 0.7.
 # teacher-forced under vLLM's sampler (logits / T, then top-p 0.95), check_temp.py's scoring.
 # traces are spread evenly over each block's lines, so a sub-block at another T cannot hide.

@@ -1,4 +1,4 @@
-# shared helpers for recovery v2. scripts run as `python src/recovery/<x>.py`,
+# shared helpers for src/recovery. scripts run as `python src/recovery/<x>.py`,
 # so src/ goes on the path for generate.py and cache.py.
 import hashlib, json, math, os, sys
 
@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from generate import MODEL, build_prompt  # noqa: E402
 
 TOP_P = 0.95  # hardcoded in generate_vllm.py
-MAX_NEW = 32768  # tag-B --max-new, the whole trace budget
+MAX_NEW = 32768  # generate.py --max-new, the whole trace budget
 OUT_DIR = "data/recovery_v2"
-# tag-B lines 0-479 are the first 80-problem run, the rest a later run
+# traces_B.jsonl lines 0-479 are the first 80-problem run, the rest a later run
 FIRST_BATCH_LINES = 480
 
 

@@ -1,4 +1,4 @@
-# X1 estimators on simulated rollouts with a known r per prefix. plain script, CPU only.
+# determination.py estimators on simulated rollouts with a known r per prefix. plain script, CPU only.
 import os, sys
 import numpy as np
 import pandas as pd

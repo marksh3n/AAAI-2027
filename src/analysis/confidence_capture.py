@@ -1,5 +1,5 @@
 # token confidence (DeepConf, arXiv 2508.15260) as a free readout at the 4,096 cut: capture of D and
-# within-problem AUROC against the source outcome (Table T8). per-token values come from
+# within-problem AUROC against the source outcome (token-confidence table). per-token values come from
 # src/replication/confidence.py (raw model distribution, temperature 1, top 20 for token confidence):
 #   conf_mean      mean token confidence
 #   lowest_group   lowest mean over sliding 2,048-token windows (stride 1)

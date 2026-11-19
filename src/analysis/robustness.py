@@ -1,8 +1,8 @@
-# Phase 4 audit of X1's headline (D is sizeable, readouts capture little), on all 87 cohort problems, exploratory:
-#   halves   D with alternating halves (0,2,4,6 / 1,3,5,7, as the confirmation bank) vs blocks (0-3 / 4-7)
+# checks of D and stronger readouts (robustness table), on all 87 cohort problems:
+#   halves   D with alternating halves (0,2,4,6 / 1,3,5,7) vs blocks (0-3 / 4-7)
 #   level    D by MATH level
 #   pre      D on traces with no </think> or \boxed in the prefix
-#   readouts stronger than X1's: tf-idf (word 1-2 grams) and a 4-layer probe (L12, 16, 20, 24), both logistic on the
+#   readouts stronger than determination.py's: tf-idf (word 1-2 grams) and a 4-layer probe (L12, 16, 20, 24), both logistic on the
 #            source outcome over all dev traces at the cut (grouped out of fold); a nonlinear probe (boosted trees
 #            on 50 principal components of L20) and a 4-layer ridge, both fit to within-problem-centered r_hat of
 #            other cohort problems
@@ -14,7 +14,7 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
@@ -23,7 +23,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "probe_cmp"))
 import stats as S  # noqa: E402
 from cheap_rollouts import load  # noqa: E402
-from determination import ALPHAS, inner_pick, probe_r, probe_y, sums, total_sums  # noqa: E402
+from determination import probe_r, probe_y, sums, total_sums  # noqa: E402
 
 SLOTS4 = [4, 5, 6, 7]  # layers 12, 16, 20, 24 in acts_B
 

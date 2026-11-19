@@ -1,4 +1,4 @@
-# X2 scoring on hand-made rows. plain script, CPU only, exits non-zero on failure.
+# cheap_rollouts.py scoring on hand-made rows. plain script, CPU only, exits non-zero on failure.
 import os, sys
 import numpy as np
 import pandas as pd

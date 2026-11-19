@@ -1,4 +1,4 @@
-# X1 + X2 on one scale: capture of D by monitors that run the model forward. samples 0-1 of each prefix make
+# capture of D by monitors that run the model forward. samples 0-1 of each prefix make
 # the monitor (capped at L), samples 2-4 and 5-7 are the two halves that estimate the true r, so the monitor is
 # never scored against its own noise. monitors: share of the 2 that finish within L (gold-free, finish time)
 # and share correct within L (gold). capture as in determination.py.

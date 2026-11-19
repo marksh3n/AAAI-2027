@@ -1,4 +1,4 @@
-# D, readout capture, re-run capture and re-run AUROC at the 4,096 cut for one model (Tables 3, 7, Figure 4).
+# D, readout capture, re-run capture and re-run AUROC at the 4,096 cut for one model (three-model table, Figure 4).
 # the cohort keeps problems whose cohort cuts include both source outcomes; --all-problems also writes every
 # re-run problem. Qwen3 and Ministral reuse the DeepSeek code unchanged: no explore / holdout split.
 #   python src/analysis/replicate.py --model qwen3 --out results/qwen3

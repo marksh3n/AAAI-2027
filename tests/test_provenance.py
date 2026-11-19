@@ -1,6 +1,5 @@
 """Regression checks for metadata binding and prediction-cache input identity."""
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path

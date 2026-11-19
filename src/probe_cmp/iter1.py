@@ -1,10 +1,10 @@
-# the iteration-1 "0.887 vs 0.854" check. BETWEEN-problem (one trace per problem):
+# pooled probe vs step count, 0.887 vs 0.854. BETWEEN problems (one trace per problem):
 # 367 traces of 367 problems, so this AUROC mostly measures difficulty. the within-problem
 # version of the same comparison is the end row of run.py's report, and that is the primary one.
-# 0.887 = Colab cell 41: layer 16, StandardScaler + LR(C=0.01), StratifiedKFold(5, shuffle, 0),
-#         cross_val_predict over all 367 last-step rows. 0.854 = cell 26: raw n_steps, unfitted.
+# 0.887: layer 16, StandardScaler + LR(C=0.01), StratifiedKFold(5, shuffle, 0), cross_val_predict over
+#        all 367 last-step rows. 0.854: raw n_steps, unfitted.
 #   Colab: %run src/probe_cmp/fetch.py --iter1, then python src/probe_cmp/iter1.py --out <dir>
-#   (or --acts /path/to/iteration-1/acts.npy; the 367 rows are sliced and cached in data/iter1/)
+#   (or --acts <between-problem acts.npy>; the 367 rows are sliced and cached in data/iter1/)
 import argparse, json, os, sys
 import numpy as np
 import pandas as pd
@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 
 from stats import boot_p, ci, delong
 
-LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # iteration-1 extraction (steps mode)
+LAYERS = [-1, 0, 4, 8, 12, 16, 20, 24, 27]  # between-problem run extraction (steps mode)
 LAYER, C = 16, 0.01
 EXPECT = {"probe": "0.887", "length": "0.854"}
 LABEL = "between-problem (one trace per problem)"
@@ -25,7 +25,7 @@ N_BOOT, N_SEEDS = 2000, 10
 
 def last_rows(meta):
     if not (meta.row.values == np.arange(len(meta))).all():
-        sys.exit("iteration-1 meta.row is not 0..n-1")
+        sys.exit("between-problem run meta.row is not 0..n-1")
     last = meta[meta.step_idx == meta.n_steps - 1]
     if len(last) != 367 or last.trace_id.duplicated().any() or last.problem_id.duplicated().any():
         sys.exit(f"expected 367 last-step rows, one per problem; got {len(last)}")
@@ -38,7 +38,7 @@ def load_x(a, last):
     if a.acts:
         acts = np.load(a.acts, mmap_mode="r")
         if acts.shape != (len(pd.read_parquet(a.meta)), len(LAYERS), 1536):
-            sys.exit(f"acts {acts.shape} does not match iteration-1 meta")
+            sys.exit(f"acts {acts.shape} does not match between-problem run meta")
         # same indexing as cell 41: acts[meta.index[last]], then the layer slot
         x = np.asarray(acts[last.row.values])[:, LAYERS.index(LAYER), :]
         np.save(cache, x)
@@ -46,10 +46,10 @@ def load_x(a, last):
         print(f"sliced {x.shape} from {a.acts} -> {cache}")
     elif os.path.exists(cache):
         if json.load(open(ids)) != last.trace_id.tolist():
-            sys.exit(f"{cache} rows are not in iteration-1 last-step order")
+            sys.exit(f"{cache} rows are not in between-problem run last-step order")
         x = np.load(cache)
     else:
-        sys.exit(f"no {cache}; pass --acts <iteration-1 acts.npy> once to slice it")
+        sys.exit(f"no {cache}; pass --acts <between-problem run acts.npy> once to slice it")
     return x.astype(np.float32)
 
 
@@ -74,7 +74,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default="data/iter1", help="holds meta.parquet and the cached slice")
     ap.add_argument("--meta", default=None)
-    ap.add_argument("--acts", default=None, help="iteration-1 acts.npy (58813, 9, 1536); needed once")
+    ap.add_argument("--acts", default=None, help="between-problem run acts.npy (58813, 9, 1536); needed once")
     ap.add_argument("--out", default="data/probe_cmp")
     a = ap.parse_args()
     a.meta = a.meta or os.path.join(a.dir, "meta.parquet")
@@ -97,7 +97,7 @@ def main():
     path = os.path.join(a.out, "delong.json")
     if got != EXPECT:
         result["plain"] = [f"NOT REPRODUCED: got probe {got['probe']} / length {got['length']}, expected "
-                           f"{EXPECT['probe']} / {EXPECT['length']}. Row alignment of the iteration-1 slice is "
+                           f"{EXPECT['probe']} / {EXPECT['length']}. Row alignment of the between-problem run slice is "
                            "suspect; nothing below was run."]
         json.dump(result, open(path, "w"), indent=2)
         sys.exit(result["plain"][0])
@@ -127,7 +127,7 @@ def main():
     })
     sig = dl["ci"][0] > 0 and lo > 0 and dels.min() > 0
     result["plain"] = [
-        f"Label: {LABEL}. {len(last)} iteration-1 traces, {int(wrong.sum())} wrong; probe = layer {LAYER}, C={C}, "
+        f"Label: {LABEL}. {len(last)} between-problem run traces, {int(wrong.sum())} wrong; probe = layer {LAYER}, C={C}, "
         "5-fold OOF. Layer and C were picked on these same predictions (cell 41 sweep), so the probe side is optimistic.",
         f"Reproduced exactly: probe {got['probe']}, step count {got['length']}.",
         f"DeLong: Δ = {dl['delta']:+.3f} [{dl['ci'][0]:+.3f}, {dl['ci'][1]:+.3f}], p = {dl['p']:.3f} "

@@ -1,4 +1,4 @@
-# X2: how much of r_hat's within-problem AUROC survives with fewer, shorter continuations, and what it costs.
+# cost of re-run monitors (cost table, Figure 2): how much of r_hat's within-problem AUROC survives with fewer, shorter continuations, and what it costs.
 # per live prefix at 512 / 2048 / 4096: K' of the 8 ceiling continuations (averaged over random subsets),
 # each capped at L tokens. three scores, all P(wrong) with the sign fixed in advance:
 #   correct   1 - share of the K' that end correct within L (needs gold)

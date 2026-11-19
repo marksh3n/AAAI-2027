@@ -33,7 +33,7 @@ def add_args(parser):
     parser.add_argument("--prefix-file", default=f"{OUT_DIR}/prefixes.jsonl")
     parser.add_argument("--out", default=None, help=f"default {OUT_DIR}/rollouts.jsonl")
     parser.add_argument("--temp", type=float, default=None,
-                        help="tag-B generation temperature (0.7), see check_temp.py")
+                        help="source sampling temperature (0.7), see check_temp.py")
     parser.add_argument("--top-p", type=float, default=TOP_P)
     parser.add_argument("--n", type=int, default=8)
     parser.add_argument("--limit", type=int, default=0, help="dry run on the first N prefixes")
@@ -149,7 +149,7 @@ def score(prefix_text, gold, text, n_gen, finish_reason):
 
 
 def token_record(ids, i, mode):
-    # the generated ids of sample i (confirmation sources), or their sha256 (rollout banks)
+    # the generated ids of sample i (replication sources), or their sha256 (rollout banks)
     if mode == "none" or ids is None:
         return {}
     got = [int(x) for x in ids[i]]
@@ -160,7 +160,7 @@ def token_record(ids, i, mode):
 
 def check_prompts(llm, make_params, recs):
     # proves prompt_token_ids are what vLLM feeds for the rendered string, BOS included. records with
-    # bos == "one" (confirmation) are fed as ids, never as a string: there the check is that the
+    # bos == "one" (replication) are fed as ids, never as a string: there the check is that the
     # ids carry exactly one leading BOS and that vLLM echoes them unchanged
     one = [r for r in recs if r.get("bos") in ("one", "template")]
     if one:
@@ -484,7 +484,7 @@ def main():
         return
 
     if args.temp is None:
-        raise SystemExit("--temp is required: the tag-B sampling temperature, 0.7")
+        raise SystemExit("--temp is required: the source sampling temperature, 0.7")
     import vllm
     print(f"vllm {vllm.__version__}", flush=True)
     if vllm.__version__ != args.vllm_version and not args.allow_version_mismatch:
@@ -517,7 +517,7 @@ def main():
         # which top-p kernel draws the samples; only recorded when set, so older config hashes are unchanged
         cfg["flashinfer_sampler"] = os.environ["VLLM_USE_FLASHINFER_SAMPLER"]
     if args.revision:
-        # confirmation: sources and banks must match on all of this, so the engine goes in too
+        # replication: sources and banks must match on all of this, so the engine goes in too
         cfg["revision"] = args.revision
         cfg["vllm"] = vllm.__version__
     cfg_hash = check_config(f"{args.out}.config.json", cfg)
@@ -553,7 +553,7 @@ def main():
     print(f"\n{'stopped: ' + stop if stop else 'all requested prefixes done'}")
     print(f"measured {tok_s or float('nan'):,.0f} gen tok/s; ${budget.spent():.2f} spent "
           f"this run (incl. ~{STARTUP_S // 60} min startup)")
-    print("progress, projected from tag-B lengths at the measured rate:")
+    print("progress, projected from source lengths at the measured rate:")
     print(progress(prefixes, done, args.round, args.n, tok_s, args.rate_usd_hr), flush=True)
 
     if args.smoke:

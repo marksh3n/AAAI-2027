@@ -1,7 +1,7 @@
-# full-depth re-extraction for the E0 table: every hidden-state entry (embedding + 28 decoder blocks,
+# full-depth re-extraction for the layer sweep: every hidden-state entry (embedding + 28 decoder blocks,
 # layer l = hidden_states[l + 1], l = -1..27) at every fixed position 128..32768, plus each finished
-# trace's last token ("end"). the leading BOS matches how each trace was generated (bos_check.py,
-# 2026-10-06): one for the pilot (traces_B lines 0-479), two for the main run (480+). extract.py's own
+# trace's last token ("end"). the leading BOS matches how each trace was generated (bos_check.py):
+# one for the first run (traces_B lines 0-479), two for the main run (480+). extract.py's own
 # encode / fixed_positions / activations are reused, so token indexing is unchanged (state at pos-1).
 # one part file per trace, so a crash costs one trace; parts are reused on a rerun.
 #   python extract_full.py --traces data/traces_B.jsonl --out /content/e0_full [--limit 3]

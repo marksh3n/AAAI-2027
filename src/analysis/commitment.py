@@ -1,5 +1,5 @@
-# X3: does the trace's commitment to an answer, as written in the prefix, explain the prefix-fixed outcome
-# variance D (X1)? capture and WP AUROC as in determination.py, on the same cohort and halves.
+# does the trace's commitment to an answer, as written in the prefix, explain the prefix-fixed outcome
+# variance D? capture and WP AUROC as in determination.py, on the same cohort and halves.
 # gold-free features (monitors), from explicitly stated candidates ("answer is", "final answer", "answer
 # should/would/must be", \boxed{}) in the prefix only:
 #   stated       any candidate stated
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "probe_cmp"))
 import stats as S  # noqa: E402
 from ceiling import answer_flags, norm  # noqa: E402
 from cheap_rollouts import load  # noqa: E402
-from determination import ALPHAS, halves, inner_pick, sums, total_sums  # noqa: E402
+from determination import halves, inner_pick, sums, total_sums  # noqa: E402
 from sklearn.model_selection import GroupKFold  # noqa: E402
 
 CUE = re.compile(r"(?i)(?:final answer|answer (?:is|should be|would be|must be)|answer:)\s*(?:is|=|:)?\s*|\\boxed\{")

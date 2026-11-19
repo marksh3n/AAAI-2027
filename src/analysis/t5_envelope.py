@@ -1,9 +1,9 @@
-# T5 "vs best no-monitor baseline": upper envelope of the maj@k and short-1@k frontiers at equal tokens, per bootstrap
+# the equal-compute table's "vs baseline" column: upper envelope of the maj@k and short-1@k frontiers at equal tokens, per bootstrap
 # draw; paired probe-minus-random interval; hindsight-oracle row (restart exactly the live traces that end wrong).
 #   python src/analysis/t5_envelope.py <dir with x4_per_problem_*.csv> <traces_B.jsonl> <results/split_all.json> <out dir>
 import json, os, sys
 import numpy as np, pandas as pd
-X4, TRACES, SPLIT, OUT = sys.argv[1:5]
+X4DIR, TRACES, SPLIT, OUT = sys.argv[1:5]
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(os.path.dirname(HERE), "probe_cmp")]
 import allocation as AL, stats as S  # noqa: E402
@@ -14,7 +14,7 @@ os.makedirs(OUT, exist_ok=True)
 SHOW = ["probe(q0.25)", "random(q0.25)", "probe(q0.5)", "random(q0.5)", "restart(T4096,R1)", "restart(T4096,R2)",
         "restart(T8192,R1)", "restart(T8192,R2)", "restart(T8192,R5)", "short-1@2", "oracle", "random(q_oracle)"]
 for half in ("holdout", "explore"):
-    per = pd.read_csv(f"{X4}/x4_per_problem_{half}.csv")
+    per = pd.read_csv(f"{X4DIR}/x4_per_problem_{half}.csv")
     sub = tr[tr.problem_id.isin(set(split[half]))]
     wrong = ~(sub.is_correct.astype(bool) & ~sub.trunc.astype(bool))
     live = sub.n_gen > 4096

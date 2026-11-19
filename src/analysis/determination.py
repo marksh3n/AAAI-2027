@@ -1,5 +1,5 @@
-# X1: how much of the within-problem outcome variance is already fixed by the prefix at 512 / 2048 / 4096, and
-# how much of that fixed part each prefix-only predictor captures.
+# outcome determination D and linear capture (determination and capture tables, Figure 1): how much of the
+# within-problem outcome variance is already fixed by the prefix at 512 / 2048 / 4096, and how much of that fixed part each prefix-only predictor captures.
 # per problem p, traces i, rollout halves A (samples 0-3) and B (4-7) of prefix i:
 #   fixed part   Cov_p(r_A, r_B) across p's traces: the variance of the true r_i, since the halves' noise is
 #                independent given the prefix (no binomial correction needed)

@@ -1,4 +1,4 @@
-# X4: compute allocation at equal generated tokens, from source traces only (no rollouts, so no sampler gap).
+# restart policies at equal generated tokens (equal-compute table, Figure 3), from source traces only (no rollouts, so no sampler gap).
 # each problem's 6 traces are its sample pool; a policy draws them in a random order (200 orders per problem)
 # and pays every token it generates, including aborted ones. policies:
 #   maj@k          k samples, plurality vote over answer keys, ties split

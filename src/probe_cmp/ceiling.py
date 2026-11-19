@@ -242,13 +242,13 @@ def run(roll, traces, preds_dir, out, drift=None, meta=None, n_boot=N_BOOT, log=
         roll["restarts"] = [meta.at[k, "restarts"] if h else np.nan for k, h in zip(keys, has)]
     tr = roll[has].copy()
 
-    # sanity: t0 restarts should track each problem's tag-B pass rate
+    # sanity: t0 restarts should track each problem's source pass rate
     t0 = roll[roll.checkpoint == "t0"].set_index("problem_id")
     by_p = traces.groupby("problem_id").is_correct.mean()
     if len(t0):
         a, b = t0.r.values, by_p.loc[t0.index].values.astype(float)
         c = np.corrcoef(a, b)[0, 1] if a.std() > 0 and b.std() > 0 else float("nan")
-        log(f"t0 sanity: r(t0) vs the problem's tag-B pass rate over {len(t0)} problems, r = {c:.2f} "
+        log(f"t0 sanity: r(t0) vs the problem's source pass rate over {len(t0)} problems, r = {c:.2f} "
             f"(mean {a.mean():.3f} vs {b.mean():.3f})")
     desc = describe(roll)
     desc.to_csv(os.path.join(out, "r_by_source.csv"), index=False)
