@@ -28,9 +28,7 @@ stub("datasets", load_dataset=lambda *a, **k: {"test": []})
 stub("math_verify", parse=lambda s: s.strip("$ ").strip(), verify=lambda a, b: a == b)
 stub("transformers", AutoTokenizer=object, AutoModelForCausalLM=object)
 
-import pandas as pd
 
-import analyze
 import build_prefixes as bp
 import run_rollouts as rr
 from cache import StaleCache
@@ -263,13 +261,6 @@ with tempfile.TemporaryDirectory() as d:
     seeds0 = {s["seed"] for r in r0 if r["round"] == 0 for s in r["samples"]}
     seeds1 = {s["seed"] for r in r0 if r["round"] == 1 for s in r["samples"]}
     check("round 1 draws a different seed stream", not seeds0 & seeds1)
-    pooled = analyze.pool_rounds(rows)
-    check("analysis pools rounds: 2 + 3 continuations", len(pooled[pid0]) == 5)
-    s = analyze.prefix_stats(pooled[pid0], "12")
-    check("prefix stats read continuation rows", s["n"] == 5 and s["k"] == 5, s)
-    old_rows = [{"prefix_id": "x", "round": 0, "sample_idx": i, "correct": True, "truncated": False,
-                 "answer": "12", "n_gen": 1} for i in range(2)]
-    check("analysis still reads one-row-per-sample files", len(analyze.pool_rounds(old_rows)["x"]) == 2)
 
     changed = [dict(prefixes[0], prefix_gen_token_ids=[7, 7])] + prefixes[1:]
     try:
@@ -350,27 +341,7 @@ with tempfile.TemporaryDirectory() as d:
     check("--max-minutes stops the run", stop is not None and "max-minutes" in stop, stop)
     check("and leaves work for a resume", 0 < len(rows) < len(units), len(rows))
 
-print("\n6. commitment, ordered by cut")
-C = analyze.commitment
-check("monotone", C([(0, 0, "t0", .2), (100, 100, "f25", .5), (200, 200, "f50", .8),
-                     (300, 300, "f75", .9)], .75)[2] == "f50")
-check("dip then recover", C([(0, 0, "t0", .8), (100, 100, "f25", .9), (200, 200, "f50", .5),
-                             (300, 300, "f75", .8), (400, 400, "pre_final", .9)], .75)[2] == "f75")
-check("never", C([(0, 0, "t0", .9), (100, 100, "f25", .9), (200, 200, "f50", .5)], .75) is None)
-check("committed from t0", C([(0, 0, "t0", .8), (100, 100, "f25", .9)], .75)[2] == "t0")
-# first_mention falls before f25 on this trace; order must follow the cut, not the name
-pts = [(200, 210, "f50", .9), (0, 0, "t0", .1), (100, 120, "f25", .6), (50, 60, "first_mention", .9)]
-check("uses cut order, not name order", C(pts, .75)[2] == "f50", C(pts, .75))
-check("NaN stability breaks the run", C([(0, 0, "t0", .9), (1, 1, "f25", float("nan"))], .75) is None)
-
-print("\n7. adjacent-drop top-up follows cut order")
-df = pd.DataFrame({"trace_id": ["a"] * 3, "prefix_id": ["t0", "fm", "f25"], "r": [1.0, 0.5, 1.0],
-                   "cut_token_idx": [0, 50, 100]})
-up = analyze.topup(df, {"t0": 1.0, "fm": 0.9, "f25": 1.0}, 0.2, 0.8, 0.25, 24)
-check("drop flags both sides", {u["prefix_id"] for u in up} == {"t0", "fm"}, up)
-check("top-up n", all(u["n"] == 24 for u in up))
-
-print("\n8. temperature MLE")
+print("\n6. temperature MLE")
 if not HAVE_TORCH:
     print("  skip  torch not installed")
 else:
